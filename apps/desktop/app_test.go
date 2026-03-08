@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -335,6 +336,57 @@ func TestOnMountStateChange_MountedResetsRetryCount(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("retry count after StateMounted = %d, want 0", count)
 	}
+}
+
+func TestAutoRemountOnStartup_SetsStoppedBeforeRemount(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	stub.data["account/acc-1/access_key_id"] = []byte("KEY1")
+	stub.data["account/acc-1/secret_access_key"] = []byte("SEC1")
+
+	db := openAppTestDB(t)
+
+	// Use a mount manager that always fails.
+	failMgr := &errorMountManager{err: fmt.Errorf("rclone not found")}
+	a := newTestApp(db, stub, failMgr)
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID: "acc-1", Provider: "s3", Email: "u@example.com",
+		Options: map[string]string{"endpoint": "https://s3.example.com", "region": "us-east-1"},
+	}); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	// Persist "mounted" state as if a previous session had acc-1 mounted.
+	if err := a.mountStateRepository.Upsert(context.Background(), storage.MountState{
+		AccountID: "acc-1", State: string(mount.StateMounted),
+	}); err != nil {
+		t.Fatalf("Upsert error = %v", err)
+	}
+
+	a.autoRemountOnStartup()
+	// Let goroutine finish.
+	time.Sleep(150 * time.Millisecond)
+
+	// After failed remount, SQLite must not be left with "mounted".
+	state, err := a.mountStateRepository.Get(context.Background(), "acc-1")
+	if err != nil {
+		t.Fatalf("Get error = %v", err)
+	}
+	if state.State == string(mount.StateMounted) {
+		t.Fatalf("State = %q after failed remount; want stopped or failed", state.State)
+	}
+}
+
+// errorMountManager is a stubMountManager whose Mount always returns an error.
+type errorMountManager struct {
+	stubMountManager
+	err error
+}
+
+func (m *errorMountManager) Mount(_ context.Context, _ string) error {
+	return m.err
 }
 
 func TestAccountMountStatus_FallsBackToSQLite(t *testing.T) {

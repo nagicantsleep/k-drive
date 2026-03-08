@@ -128,6 +128,8 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // autoRemountOnStartup re-mounts any account whose last persisted state was "mounted".
+// Before attempting the remount it marks the persisted state as "stopped" so that a
+// crash-then-restart does not leave stale "mounted" in SQLite if the remount fails.
 func (a *App) autoRemountOnStartup() {
 	accounts, err := a.accountRepository.List(a.ctx)
 	if err != nil {
@@ -138,12 +140,28 @@ func (a *App) autoRemountOnStartup() {
 		if err != nil {
 			continue
 		}
-		if state.State == string(mount.StateMounted) {
-			accountID := acc.ID
-			go func() {
-				_ = a.doMount(accountID)
-			}()
+		if state.State != string(mount.StateMounted) {
+			continue
 		}
+		accountID := acc.ID
+
+		// Mark as stopped before remounting so a crash mid-attempt leaves a clean state.
+		_ = a.mountStateRepository.Upsert(a.ctx, storage.MountState{
+			AccountID: accountID,
+			State:     string(mount.StateStopped),
+			LastError: "",
+		})
+
+		go func() {
+			if err := a.doMount(accountID); err != nil {
+				_ = a.mountStateRepository.Upsert(context.Background(), storage.MountState{
+					AccountID:     accountID,
+					State:         string(mount.StateFailed),
+					LastError:     err.Error(),
+					ErrorCategory: errorCategoryFromErr(err),
+				})
+			}
+		}()
 	}
 }
 
