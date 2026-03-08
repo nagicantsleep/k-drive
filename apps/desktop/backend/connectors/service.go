@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type Provider string
@@ -63,19 +64,52 @@ func (c *S3Connector) Provider() Provider {
 }
 
 func (c *S3Connector) BuildRemoteConfig(_ context.Context, account AccountConfig) (RemoteConfig, error) {
-	if account.AccountID == "" {
+	if strings.TrimSpace(account.AccountID) == "" {
 		return RemoteConfig{}, fmt.Errorf("account ID is required")
 	}
 
-	name := fmt.Sprintf("s3-%s", account.AccountID)
-	options := make(map[string]string)
-	for key, value := range account.Options {
-		options[key] = value
+	normalized := make(map[string]string)
+
+	endpoint, err := requiredOption(account.Options, "endpoint")
+	if err != nil {
+		return RemoteConfig{}, err
+	}
+	region, err := requiredOption(account.Options, "region")
+	if err != nil {
+		return RemoteConfig{}, err
+	}
+	accessKeyID, err := requiredOption(account.Options, "access_key_id")
+	if err != nil {
+		return RemoteConfig{}, err
+	}
+	secretAccessKey, err := requiredOption(account.Options, "secret_access_key")
+	if err != nil {
+		return RemoteConfig{}, err
+	}
+
+	normalized["provider"] = "Other"
+	normalized["endpoint"] = endpoint
+	normalized["region"] = region
+	normalized["access_key_id"] = accessKeyID
+	normalized["secret_access_key"] = secretAccessKey
+	normalized["env_auth"] = "false"
+
+	if bucket := strings.TrimSpace(account.Options["bucket"]); bucket != "" {
+		normalized["bucket"] = bucket
 	}
 
 	return RemoteConfig{
-		Name:    name,
+		Name:    fmt.Sprintf("s3-%s", account.AccountID),
 		Type:    string(ProviderS3),
-		Options: options,
+		Options: normalized,
 	}, nil
+}
+
+func requiredOption(options map[string]string, key string) (string, error) {
+	value := strings.TrimSpace(options[key])
+	if value == "" {
+		return "", fmt.Errorf("missing required s3 option: %s", key)
+	}
+
+	return value, nil
 }
