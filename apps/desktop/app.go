@@ -294,15 +294,21 @@ func (a *App) doMount(accountID string) error {
 		Options:   opts,
 	})
 	if err != nil {
-		return fmt.Errorf("build remote config: %w", err)
+		return &configInvalidError{cause: fmt.Errorf("build remote config: %w", err)}
 	}
 
 	if err := a.mountManager.WriteConfig(remoteConfig); err != nil {
-		return fmt.Errorf("write rclone config: %w", err)
+		return &configInvalidError{cause: fmt.Errorf("write rclone config: %w", err)}
 	}
 
 	return a.mountManager.Mount(a.ctx, accountID)
 }
+
+// configInvalidError wraps config-validation failures so errorCategoryFromErr can classify them.
+type configInvalidError struct{ cause error }
+
+func (e *configInvalidError) Error() string  { return e.cause.Error() }
+func (e *configInvalidError) Unwrap() error  { return e.cause }
 
 func (a *App) UnmountAccount(accountID string) error {
 	if err := connectors.ValidateAccountID(accountID); err != nil {
@@ -366,7 +372,8 @@ func errorCategoryFor(lastError string) string {
 }
 
 // errorCategoryFromErr extracts the category from a *mount.PreflightError if present,
-// otherwise returns "process_failed" for generic mount errors or "" for nil.
+// returns "config_invalid" for configInvalidError, otherwise "process_failed" for
+// generic mount errors, or "" for nil.
 func errorCategoryFromErr(err error) string {
 	if err == nil {
 		return ""
@@ -374,6 +381,10 @@ func errorCategoryFromErr(err error) string {
 	var pe *mount.PreflightError
 	if errors.As(err, &pe) {
 		return string(pe.Category)
+	}
+	var ce *configInvalidError
+	if errors.As(err, &ce) {
+		return "config_invalid"
 	}
 	return "process_failed"
 }

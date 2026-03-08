@@ -76,7 +76,11 @@ func openAppTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("OpenDatabase() error = %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		// Wait a moment for any background goroutines using the DB to finish before closing.
+		time.Sleep(20 * time.Millisecond)
+		_ = db.Close()
+	})
 	return db
 }
 
@@ -366,8 +370,8 @@ func TestAutoRemountOnStartup_SetsStoppedBeforeRemount(t *testing.T) {
 	}
 
 	a.autoRemountOnStartup()
-	// Let goroutine finish.
-	time.Sleep(150 * time.Millisecond)
+	// Let goroutines finish — they need to write state back to SQLite after a failed remount.
+	time.Sleep(300 * time.Millisecond)
 
 	// After failed remount, SQLite must not be left with "mounted".
 	state, err := a.mountStateRepository.Get(context.Background(), "acc-1")
@@ -387,6 +391,33 @@ type errorMountManager struct {
 
 func (m *errorMountManager) Mount(_ context.Context, _ string) error {
 	return m.err
+}
+
+func TestErrorCategoryFromErr_ConfigInvalid(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	db := openAppTestDB(t)
+	a := newTestApp(db, stub, &stubMountManager{})
+
+	// Save an account that has no secrets (BuildRemoteConfig will fail).
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID: "acc-nokey", Provider: "s3", Email: "u@example.com",
+		Options: map[string]string{"endpoint": "https://s3.example.com", "region": "us-east-1"},
+		// deliberately no access_key_id / secret_access_key in options (also not in secret store)
+	}); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	err := a.doMount("acc-nokey")
+	if err == nil {
+		t.Fatal("doMount(missing credentials) expected error, got nil")
+	}
+
+	cat := errorCategoryFromErr(err)
+	if cat != "config_invalid" {
+		t.Fatalf("errorCategory = %q, want config_invalid", cat)
+	}
 }
 
 func TestAccountMountStatus_FallsBackToSQLite(t *testing.T) {
