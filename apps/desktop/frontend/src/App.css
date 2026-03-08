@@ -102,6 +102,29 @@
   color: #6b7280;
 }
 
-.mount-status__error {
+.loading {
+  color: #6b7280;
   font-style: italic;
+}
+
+.mount-status__error-detail {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: inherit;
+  word-break: break-word;
+}
+
+.mount-status__error-category {
+  font-weight: 600;
+  font-style: normal;
+}
+
+.actions__retry {
+  border-color: #dc2626 !important;
+  color: #dc2626;
+}
+
+.actions__retry:hover:not(:disabled) {
+  background: #fef2f2;
 }

@@ -14,6 +14,13 @@ type MountStatus = {
   errorCategory: string;
 };
 
+const CATEGORY_LABELS: Record<string, string> = {
+  dependency_missing: 'Dependency missing',
+  path_error: 'Path error',
+  config_invalid: 'Config invalid',
+  process_failed: 'Process failed',
+};
+
 const go = (window as any).go.main.App;
 
 function App() {
@@ -27,6 +34,7 @@ function App() {
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [statuses, setStatuses] = useState<Record<string, MountStatus>>({});
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [formPending, setFormPending] = useState(false);
@@ -34,6 +42,9 @@ function App() {
 
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
+
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
 
   async function refreshStatuses(accountList: Account[]) {
     const next: Record<string, MountStatus> = {};
@@ -57,7 +68,7 @@ function App() {
   }
 
   useEffect(() => {
-    void refreshAccounts();
+    void refreshAccounts().finally(() => setLoading(false));
   }, []);
 
   // Poll status while any account is in 'mounting' state.
@@ -66,13 +77,13 @@ function App() {
     if (!hasMounting) return;
 
     const interval = setInterval(async () => {
-      const updated = await refreshStatuses(accounts);
+      const updated = await refreshStatuses(accountsRef.current);
       const stillMounting = Object.values(updated).some((s) => s.state === 'mounting');
       if (!stillMounting) clearInterval(interval);
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [statuses, accounts]);
+  }, [statuses]);
 
   async function onCreateAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -116,6 +127,9 @@ function App() {
       setStatuses((prev) => ({ ...prev, [id]: status }));
     } catch (e: any) {
       setError(String(e));
+      // Refresh so the error state is visible in the row too.
+      const status = (await go.AccountMountStatus(id).catch(() => null)) as MountStatus | null;
+      if (status) setStatuses((prev) => ({ ...prev, [id]: status }));
     } finally {
       setPendingAction((p) => ({ ...p, [id]: false }));
     }
@@ -133,6 +147,19 @@ function App() {
     } finally {
       setPendingAction((p) => ({ ...p, [id]: false }));
     }
+  }
+
+  function categoryLabel(cat: string) {
+    return CATEGORY_LABELS[cat] ?? cat;
+  }
+
+  if (loading) {
+    return (
+      <div className="app">
+        <h1>K-Drive</h1>
+        <p className="loading">Loading accounts…</p>
+      </div>
+    );
   }
 
   return (
@@ -156,30 +183,56 @@ function App() {
         {accounts.map((account) => {
           const busy = pendingAction[account.id] ?? false;
           const status = statuses[account.id];
+          const state = status?.state ?? 'stopped';
+          const isMounting = state === 'mounting';
+          const isMounted = state === 'mounted';
+          const isFailed = state === 'failed';
+          const isStopped = state === 'stopped';
+
           return (
             <li key={account.id}>
               <div>
                 <strong>{account.id}</strong> ({account.provider}) — {account.email}
               </div>
-              <div className={`mount-status mount-status--${status?.state ?? 'stopped'}`}>
-                Status: {status?.state ?? 'stopped'}
-                {status?.state === 'failed' && status?.lastError && (
-                  <span className="mount-status__error">
-                    {' — '}
-                    {status.errorCategory && status.errorCategory !== 'process_failed'
-                      ? `[${status.errorCategory}] `
-                      : ''}
+              <div className={`mount-status mount-status--${state}`}>
+                {isMounting ? 'Connecting…' : `Status: ${state}`}
+                {isFailed && status?.lastError && (
+                  <div className="mount-status__error-detail">
+                    {status.errorCategory && (
+                      <span className="mount-status__error-category">{categoryLabel(status.errorCategory)}: </span>
+                    )}
                     {status.lastError}
-                  </span>
+                  </div>
                 )}
               </div>
               <div className="actions">
-                <button type="button" onClick={() => mountAccount(account.id)} disabled={busy}>
-                  {busy ? '…' : 'Mount'}
+                <button
+                  type="button"
+                  onClick={() => mountAccount(account.id)}
+                  disabled={busy || isMounting || isMounted}
+                  title={isMounted ? 'Already mounted' : isMounting ? 'Connecting…' : 'Mount this drive'}
+                >
+                  {busy && !isFailed ? '…' : 'Mount'}
                 </button>
-                <button type="button" onClick={() => unmountAccount(account.id)} disabled={busy}>
-                  {busy ? '…' : 'Unmount'}
+                <button
+                  type="button"
+                  onClick={() => unmountAccount(account.id)}
+                  disabled={busy || isStopped}
+                  title={isStopped ? 'Not mounted' : 'Unmount this drive'}
+                >
+                  {busy && isMounted ? '…' : 'Unmount'}
                 </button>
+                {isFailed && (
+                  <button
+                    type="button"
+                    className="actions__retry"
+                    onClick={() => mountAccount(account.id)}
+                    disabled={busy}
+                    title="Retry mount"
+                  >
+                    {busy ? '…' : 'Retry'}
+                  </button>
+                )}
               </div>
             </li>
           );
