@@ -22,15 +22,29 @@
   cursor: pointer;
 }
 
+.account-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .account-form input {
   padding: 0.55rem 0.7rem;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
 }
 
+.account-form input:disabled {
+  background: #f1f5f9;
+}
+
 .message {
   margin: 0 0 1rem;
   color: #0369a1;
+}
+
+.error {
+  margin: 0 0 1rem;
+  color: #dc2626;
 }
 
 .account-list {
@@ -60,6 +74,11 @@
   border-radius: 6px;
   background: #f8fafc;
   cursor: pointer;
+}
+
+.actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .mount-status {
