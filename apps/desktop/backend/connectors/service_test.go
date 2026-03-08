@@ -5,6 +5,38 @@ import (
 	"testing"
 )
 
+func TestValidateAccountID(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		id      string
+		wantErr bool
+	}{
+		{"", true},
+		{"has space", true},
+		{"has/slash", true},
+		{"has.dot", true},
+		{"valid-id", false},
+		{"valid_id", false},
+		{"ValidID123", false},
+		{"123", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAccountID(tc.id)
+			if tc.wantErr && err == nil {
+				t.Fatalf("ValidateAccountID(%q) = nil, want error", tc.id)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("ValidateAccountID(%q) = %v, want nil", tc.id, err)
+			}
+		})
+	}
+}
+
 func TestS3Connector_BuildRemoteConfig_ValidationError(t *testing.T) {
 	t.Parallel()
 

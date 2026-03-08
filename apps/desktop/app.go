@@ -1,7 +1,6 @@
 package main
 
 import (
-	"KDrive/backend/auth"
 	"KDrive/backend/connectors"
 	"KDrive/backend/mount"
 	"KDrive/backend/storage"
@@ -34,7 +33,6 @@ type App struct {
 	db                   *sql.DB
 	connectorRegistry    connectors.Registry
 	mountManager         mount.Manager
-	authService          auth.Service
 	accountRepository    storage.AccountRepository
 	mountStateRepository storage.MountStateRepository
 	secretStore          storage.SecretStore
@@ -50,13 +48,27 @@ func NewApp() *App {
 	registry := connectors.NewRegistry()
 	registry.Register(connectors.NewS3Connector())
 
+	mountStateRepo := storage.NewSQLiteMountStateRepository(db)
+
+	manager := mount.NewManagerWithConfig(mount.ProcessManagerConfig{
+		ConfigManager: mount.NewConfigManager(),
+		RclonePath:    "rclone",
+		MountBaseDir:  mount.DefaultMountBaseDir(),
+		OnStateChange: func(accountID string, state mount.State, lastError string) {
+			_ = mountStateRepo.Upsert(context.Background(), storage.MountState{
+				AccountID: accountID,
+				State:     string(state),
+				LastError: lastError,
+			})
+		},
+	})
+
 	return &App{
 		db:                   db,
 		connectorRegistry:    registry,
-		mountManager:         mount.NewManager(),
-		authService:          auth.NewService(),
+		mountManager:         manager,
 		accountRepository:    storage.NewSQLiteAccountRepository(db),
-		mountStateRepository: storage.NewSQLiteMountStateRepository(db),
+		mountStateRepository: mountStateRepo,
 		secretStore:          storage.NewSQLiteSecretStore(db),
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"sync"
 	"time"
 
@@ -44,25 +43,31 @@ type mountEntry struct {
 }
 
 type ProcessManager struct {
-	mu           sync.Mutex
-	entries      map[string]*mountEntry
-	configMgr    *ConfigManager
-	rclonePath   string
-	mountBaseDir string
+	mu            sync.Mutex
+	entries       map[string]*mountEntry
+	configMgr     *ConfigManager
+	rclonePath    string
+	mountBaseDir  string
+	onStateChange func(accountID string, state State, lastError string)
 }
 
 type ProcessManagerConfig struct {
 	ConfigManager *ConfigManager
 	RclonePath    string
 	MountBaseDir  string
+	OnStateChange func(accountID string, state State, lastError string)
 }
 
 func NewManager() Manager {
 	return newProcessManager(ProcessManagerConfig{
 		ConfigManager: NewConfigManager(),
 		RclonePath:    "rclone",
-		MountBaseDir:  defaultMountBaseDir(),
+		MountBaseDir:  DefaultMountBaseDir(),
 	})
+}
+
+func NewManagerWithConfig(cfg ProcessManagerConfig) Manager {
+	return newProcessManager(cfg)
 }
 
 func newProcessManager(cfg ProcessManagerConfig) *ProcessManager {
@@ -72,10 +77,11 @@ func newProcessManager(cfg ProcessManagerConfig) *ProcessManager {
 	}
 
 	return &ProcessManager{
-		entries:      make(map[string]*mountEntry),
-		configMgr:    cfg.ConfigManager,
-		rclonePath:   rclonePath,
-		mountBaseDir: cfg.MountBaseDir,
+		entries:       make(map[string]*mountEntry),
+		configMgr:     cfg.ConfigManager,
+		rclonePath:    rclonePath,
+		mountBaseDir:  cfg.MountBaseDir,
+		onStateChange: cfg.OnStateChange,
 	}
 }
 
@@ -136,12 +142,14 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 		done:   done,
 	}
 	m.entries[accountID] = entry
+	m.notifyStateChange(accountID, StateMounting, "")
 
 	if err := cmd.Start(); err != nil {
 		cancel()
 		close(done)
 		entry.state = StateFailed
 		entry.lastError = err.Error()
+		m.notifyStateChange(accountID, StateFailed, entry.lastError)
 		return fmt.Errorf("start rclone mount: %w", err)
 	}
 
@@ -183,6 +191,7 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 			entry.state = StateFailed
 			entry.lastError = "rclone exited unexpectedly"
 		}
+		m.notifyStateChange(accountID, entry.state, entry.lastError)
 		return
 
 	case <-probeTimer.C:
@@ -190,6 +199,7 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 		m.mu.Lock()
 		if m.entries[accountID] == entry && entry.state == StateMounting {
 			entry.state = StateMounted
+			m.notifyStateChange(accountID, StateMounted, "")
 		}
 		m.mu.Unlock()
 	}
@@ -212,6 +222,7 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 	} else {
 		entry.state = StateStopped
 	}
+	m.notifyStateChange(accountID, entry.state, entry.lastError)
 }
 
 func (m *ProcessManager) Unmount(_ context.Context, accountID string) error {
@@ -226,6 +237,7 @@ func (m *ProcessManager) Unmount(_ context.Context, accountID string) error {
 	entry.state = StateStopped
 	entry.cancel()
 	done := entry.done
+	m.notifyStateChange(accountID, StateStopped, "")
 	m.mu.Unlock()
 
 	// Wait (bounded) for process to exit.
@@ -257,9 +269,13 @@ func (m *ProcessManager) Status(_ context.Context, accountID string) (Status, er
 	}, nil
 }
 
-var safeAccountIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+func (m *ProcessManager) notifyStateChange(accountID string, state State, lastError string) {
+	if m.onStateChange != nil {
+		m.onStateChange(accountID, state, lastError)
+	}
+}
 
-func defaultMountBaseDir() string {
+func DefaultMountBaseDir() string {
 	return `C:\KDrive`
 }
 
