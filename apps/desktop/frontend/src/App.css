@@ -61,3 +61,28 @@
   background: #f8fafc;
   cursor: pointer;
 }
+
+.mount-status {
+  margin-top: 0.3rem;
+  font-size: 0.875rem;
+}
+
+.mount-status--mounted {
+  color: #16a34a;
+}
+
+.mount-status--mounting {
+  color: #0369a1;
+}
+
+.mount-status--failed {
+  color: #dc2626;
+}
+
+.mount-status--stopped {
+  color: #6b7280;
+}
+
+.mount-status__error {
+  font-style: italic;
+}

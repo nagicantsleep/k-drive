@@ -10,7 +10,8 @@ type Account = {
 
 type MountStatus = {
   accountId: string;
-  state: string;
+  state: 'stopped' | 'mounting' | 'mounted' | 'failed' | string;
+  lastError: string;
 };
 
 function App() {
@@ -19,17 +20,17 @@ function App() {
   const [bucket, setBucket] = useState('');
   const [region, setRegion] = useState('');
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, string>>({});
+  const [statuses, setStatuses] = useState<Record<string, MountStatus>>({});
   const [message, setMessage] = useState('');
 
   async function refreshAccounts() {
     const nextAccounts = (await (window as any).go.main.App.ListAccounts()) as Account[];
     setAccounts(nextAccounts);
 
-    const nextStatuses: Record<string, string> = {};
+    const nextStatuses: Record<string, MountStatus> = {};
     for (const account of nextAccounts) {
       const status = (await (window as any).go.main.App.AccountMountStatus(account.id)) as MountStatus;
-      nextStatuses[account.id] = status.state;
+      nextStatuses[account.id] = status;
     }
     setStatuses(nextStatuses);
   }
@@ -59,13 +60,13 @@ function App() {
   async function mountAccount(id: string) {
     await (window as any).go.main.App.MountAccount(id);
     const status = (await (window as any).go.main.App.AccountMountStatus(id)) as MountStatus;
-    setStatuses((prev) => ({ ...prev, [id]: status.state }));
+    setStatuses((prev) => ({ ...prev, [id]: status }));
   }
 
   async function unmountAccount(id: string) {
     await (window as any).go.main.App.UnmountAccount(id);
     const status = (await (window as any).go.main.App.AccountMountStatus(id)) as MountStatus;
-    setStatuses((prev) => ({ ...prev, [id]: status.state }));
+    setStatuses((prev) => ({ ...prev, [id]: status }));
   }
 
   return (
@@ -88,7 +89,12 @@ function App() {
               <strong>{account.id}</strong> ({account.provider}) - {account.email}
             </div>
             <div>Bucket: {account.options.bucket} | Region: {account.options.region}</div>
-            <div>Status: {statuses[account.id] ?? 'stopped'}</div>
+            <div className={`mount-status mount-status--${statuses[account.id]?.state ?? 'stopped'}`}>
+              Status: {statuses[account.id]?.state ?? 'stopped'}
+              {statuses[account.id]?.state === 'failed' && statuses[account.id]?.lastError && (
+                <span className="mount-status__error"> — {statuses[account.id].lastError}</span>
+              )}
+            </div>
             <div className="actions">
               <button type="button" onClick={() => mountAccount(account.id)}>Mount</button>
               <button type="button" onClick={() => unmountAccount(account.id)}>Unmount</button>
