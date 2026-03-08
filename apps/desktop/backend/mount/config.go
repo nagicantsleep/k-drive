@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const defaultConfigFileName = "rclone.conf"
 
 type ConfigManager struct {
+	mu         sync.Mutex
 	configPath string
 }
 
@@ -28,26 +30,36 @@ func (m *ConfigManager) ConfigPath() string {
 }
 
 func (m *ConfigManager) WriteRemote(remoteName string, remoteType string, options map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	sections, err := m.readSections()
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
+	// Build section: type is always set from remoteType, never overridable by options.
 	section := make(map[string]string, len(options)+1)
-	section["type"] = remoteType
 	for k, v := range options {
+		if k == "type" {
+			continue
+		}
 		section[k] = v
 	}
+	section["type"] = remoteType
 
 	if sections == nil {
 		sections = make(map[string]map[string]string)
 	}
 	sections[remoteName] = section
 
-	return m.writeSections(sections)
+	return m.writeSectionsAtomic(sections)
 }
 
 func (m *ConfigManager) DeleteRemote(remoteName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	sections, err := m.readSections()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -57,7 +69,7 @@ func (m *ConfigManager) DeleteRemote(remoteName string) error {
 	}
 
 	delete(sections, remoteName)
-	return m.writeSections(sections)
+	return m.writeSectionsAtomic(sections)
 }
 
 func (m *ConfigManager) readSections() (map[string]map[string]string, error) {
@@ -97,7 +109,7 @@ func (m *ConfigManager) readSections() (map[string]map[string]string, error) {
 	return sections, nil
 }
 
-func (m *ConfigManager) writeSections(sections map[string]map[string]string) error {
+func (m *ConfigManager) writeSectionsAtomic(sections map[string]map[string]string) error {
 	dir := filepath.Dir(m.configPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
@@ -127,8 +139,15 @@ func (m *ConfigManager) writeSections(sections map[string]map[string]string) err
 		sb.WriteString("\n")
 	}
 
-	if err := os.WriteFile(m.configPath, []byte(sb.String()), 0o600); err != nil {
-		return fmt.Errorf("write rclone config: %w", err)
+	// Atomic write: write to temp file, then rename over destination.
+	tmpPath := m.configPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(sb.String()), 0o600); err != nil {
+		return fmt.Errorf("write rclone config tmp: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, m.configPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("replace rclone config: %w", err)
 	}
 
 	return nil

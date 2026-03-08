@@ -3,8 +3,22 @@ package connectors
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var accountIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// ValidateAccountID ensures accountID is safe for use in file paths and config section names.
+func ValidateAccountID(id string) error {
+	if id == "" {
+		return fmt.Errorf("account ID is required")
+	}
+	if !accountIDPattern.MatchString(id) {
+		return fmt.Errorf("account ID must contain only letters, digits, hyphens, and underscores")
+	}
+	return nil
+}
 
 type Provider string
 

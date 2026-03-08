@@ -77,8 +77,29 @@ func TestConfigManager_WriteRemoteDeleteRemote(t *testing.T) {
 		t.Fatalf("DeleteRemote() removed s3-acc-2 unexpectedly\ncontent:\n%s", string(data3))
 	}
 
+	// DeleteRemote(nonexistent) should be a no-op.
 	if err := manager.DeleteRemote("nonexistent"); err != nil {
 		t.Fatalf("DeleteRemote(nonexistent) error = %v", err)
+	}
+
+	// Verify that passing "type" in options does NOT override remoteType.
+	optionsWithTypeOverride := map[string]string{
+		"type":     "override-attempt",
+		"endpoint": "https://s3.example.com",
+		"region":   "ap-northeast-1",
+	}
+	if err := manager.WriteRemote("s3-acc-3", "s3", optionsWithTypeOverride); err != nil {
+		t.Fatalf("WriteRemote(type-override) error = %v", err)
+	}
+	data4, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(type-override) error = %v", err)
+	}
+	if !containsLine(string(data4), "type = s3") {
+		t.Fatalf("WriteRemote() options must not override type\ncontent:\n%s", string(data4))
+	}
+	if containsLine(string(data4), "type = override-attempt") {
+		t.Fatalf("WriteRemote() options overrode type\ncontent:\n%s", string(data4))
 	}
 }
 
