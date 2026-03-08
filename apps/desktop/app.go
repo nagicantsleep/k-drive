@@ -7,7 +7,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
+	"time"
 )
+
+const maxMountRetries = 3
 
 type CreateS3AccountRequest struct {
 	AccountID string            `json:"accountId"`
@@ -36,6 +40,11 @@ type App struct {
 	accountRepository    storage.AccountRepository
 	mountStateRepository storage.MountStateRepository
 	secretStore          storage.SecretStore
+
+	retryMu        sync.Mutex
+	retryCounts    map[string]int
+	stoppedByUser  map[string]bool
+	retryBaseDelay time.Duration
 }
 
 // NewApp creates a new App application struct
@@ -50,31 +59,89 @@ func NewApp() *App {
 
 	mountStateRepo := storage.NewSQLiteMountStateRepository(db)
 
-	manager := mount.NewManagerWithConfig(mount.ProcessManagerConfig{
-		ConfigManager: mount.NewConfigManager(),
-		RclonePath:    "rclone",
-		MountBaseDir:  mount.DefaultMountBaseDir(),
-		OnStateChange: func(accountID string, state mount.State, lastError string) {
-			_ = mountStateRepo.Upsert(context.Background(), storage.MountState{
-				AccountID: accountID,
-				State:     string(state),
-				LastError: lastError,
-			})
-		},
-	})
-
-	return &App{
+	a := &App{
 		db:                   db,
 		connectorRegistry:    registry,
-		mountManager:         manager,
 		accountRepository:    storage.NewSQLiteAccountRepository(db),
 		mountStateRepository: mountStateRepo,
 		secretStore:          storage.NewSQLiteSecretStore(db),
+		retryCounts:          make(map[string]int),
+		stoppedByUser:        make(map[string]bool),
+		retryBaseDelay:       5 * time.Second,
+	}
+
+	a.mountManager = mount.NewManagerWithConfig(mount.ProcessManagerConfig{
+		ConfigManager: mount.NewConfigManager(),
+		RclonePath:    "rclone",
+		MountBaseDir:  mount.DefaultMountBaseDir(),
+		OnStateChange: a.onMountStateChange,
+	})
+
+	return a
+}
+
+// onMountStateChange persists the new state to SQLite and schedules retries on unexpected failure.
+func (a *App) onMountStateChange(accountID string, state mount.State, lastError string) {
+	_ = a.mountStateRepository.Upsert(context.Background(), storage.MountState{
+		AccountID: accountID,
+		State:     string(state),
+		LastError: lastError,
+	})
+
+	switch state {
+	case mount.StateFailed:
+		a.retryMu.Lock()
+		if a.stoppedByUser[accountID] {
+			a.retryMu.Unlock()
+			return
+		}
+		a.retryCounts[accountID]++
+		count := a.retryCounts[accountID]
+		a.retryMu.Unlock()
+
+		if count <= maxMountRetries {
+			delay := time.Duration(count) * a.retryBaseDelay
+			go func() {
+				time.Sleep(delay)
+				a.retryMu.Lock()
+				skip := a.stoppedByUser[accountID]
+				a.retryMu.Unlock()
+				if !skip {
+					_ = a.doMount(accountID)
+				}
+			}()
+		}
+
+	case mount.StateMounted:
+		a.retryMu.Lock()
+		a.retryCounts[accountID] = 0
+		a.retryMu.Unlock()
 	}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.autoRemountOnStartup()
+}
+
+// autoRemountOnStartup re-mounts any account whose last persisted state was "mounted".
+func (a *App) autoRemountOnStartup() {
+	accounts, err := a.accountRepository.List(a.ctx)
+	if err != nil {
+		return
+	}
+	for _, acc := range accounts {
+		state, err := a.mountStateRepository.Get(a.ctx, acc.ID)
+		if err != nil {
+			continue
+		}
+		if state.State == string(mount.StateMounted) {
+			accountID := acc.ID
+			go func() {
+				_ = a.doMount(accountID)
+			}()
+		}
+	}
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -153,11 +220,22 @@ func (a *App) ListAccounts() ([]AccountView, error) {
 	return result, nil
 }
 
+// MountAccount is the Wails-bound user-initiated mount. It resets retry state before mounting.
 func (a *App) MountAccount(accountID string) error {
 	if err := connectors.ValidateAccountID(accountID); err != nil {
 		return err
 	}
 
+	a.retryMu.Lock()
+	delete(a.stoppedByUser, accountID)
+	a.retryCounts[accountID] = 0
+	a.retryMu.Unlock()
+
+	return a.doMount(accountID)
+}
+
+// doMount is the shared implementation used by MountAccount, startup recovery, and retry goroutines.
+func (a *App) doMount(accountID string) error {
 	accounts, err := a.accountRepository.List(a.ctx)
 	if err != nil {
 		return fmt.Errorf("load accounts: %w", err)
@@ -210,6 +288,11 @@ func (a *App) UnmountAccount(accountID string) error {
 		return err
 	}
 
+	a.retryMu.Lock()
+	a.stoppedByUser[accountID] = true
+	a.retryCounts[accountID] = 0
+	a.retryMu.Unlock()
+
 	if err := a.mountManager.Unmount(a.ctx, accountID); err != nil {
 		return err
 	}
@@ -220,10 +303,23 @@ func (a *App) UnmountAccount(accountID string) error {
 	return nil
 }
 
+// AccountMountStatus returns the current mount status from the process manager. When the
+// process manager has no active entry (state = stopped), it falls back to the last known
+// state persisted in SQLite so the frontend reflects state across restarts.
 func (a *App) AccountMountStatus(accountID string) (MountStatusView, error) {
 	status, err := a.mountManager.Status(a.ctx, accountID)
 	if err != nil {
 		return MountStatusView{}, err
+	}
+
+	if status.State == mount.StateStopped {
+		if dbState, dbErr := a.mountStateRepository.Get(a.ctx, accountID); dbErr == nil {
+			return MountStatusView{
+				AccountID: accountID,
+				State:     dbState.State,
+				LastError: dbState.LastError,
+			}, nil
+		}
 	}
 
 	return MountStatusView{
