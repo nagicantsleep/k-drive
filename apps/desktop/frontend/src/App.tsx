@@ -11,6 +11,7 @@ type MountStatus = {
   accountId: string;
   state: 'stopped' | 'mounting' | 'mounted' | 'failed' | string;
   lastError: string;
+  errorCategory: string;
 };
 
 const go = (window as any).go.main.App;
@@ -41,7 +42,7 @@ function App() {
         const status = (await go.AccountMountStatus(account.id)) as MountStatus;
         next[account.id] = status;
       } catch {
-        next[account.id] = { accountId: account.id, state: 'stopped', lastError: '' };
+        next[account.id] = { accountId: account.id, state: 'stopped', lastError: '', errorCategory: '' };
       }
     }
     setStatuses(next);
@@ -163,7 +164,13 @@ function App() {
               <div className={`mount-status mount-status--${status?.state ?? 'stopped'}`}>
                 Status: {status?.state ?? 'stopped'}
                 {status?.state === 'failed' && status?.lastError && (
-                  <span className="mount-status__error"> — {status.lastError}</span>
+                  <span className="mount-status__error">
+                    {' — '}
+                    {status.errorCategory && status.errorCategory !== 'process_failed'
+                      ? `[${status.errorCategory}] `
+                      : ''}
+                    {status.lastError}
+                  </span>
                 )}
               </div>
               <div className="actions">

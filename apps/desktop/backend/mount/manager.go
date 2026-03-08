@@ -48,14 +48,14 @@ type ProcessManager struct {
 	configMgr     *ConfigManager
 	rclonePath    string
 	mountBaseDir  string
-	onStateChange func(accountID string, state State, lastError string)
+	onStateChange func(accountID string, state State, lastError string, mountErr error)
 }
 
 type ProcessManagerConfig struct {
 	ConfigManager *ConfigManager
 	RclonePath    string
 	MountBaseDir  string
-	OnStateChange func(accountID string, state State, lastError string)
+	OnStateChange func(accountID string, state State, lastError string, mountErr error)
 }
 
 func NewManager() Manager {
@@ -115,6 +115,13 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 		}
 	}
 
+	if err := runPreflight(m.rclonePath, m.mountBaseDir); err != nil {
+		entry := &mountEntry{state: StateFailed, lastError: err.Error()}
+		m.entries[accountID] = entry
+		m.notifyStateChange(accountID, StateFailed, entry.lastError, err)
+		return err
+	}
+
 	mountPoint := mountPointPath(m.mountBaseDir, accountID)
 	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
 		return fmt.Errorf("create mount point: %w", err)
@@ -142,15 +149,16 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 		done:   done,
 	}
 	m.entries[accountID] = entry
-	m.notifyStateChange(accountID, StateMounting, "")
+	m.notifyStateChange(accountID, StateMounting, "", nil)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
 		close(done)
 		entry.state = StateFailed
 		entry.lastError = err.Error()
-		m.notifyStateChange(accountID, StateFailed, entry.lastError)
-		return fmt.Errorf("start rclone mount: %w", err)
+		startErr := fmt.Errorf("start rclone mount: %w", err)
+		m.notifyStateChange(accountID, StateFailed, entry.lastError, startErr)
+		return startErr
 	}
 
 	go m.watchProcess(accountID, entry, cmd, done)
@@ -191,7 +199,7 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 			entry.state = StateFailed
 			entry.lastError = "rclone exited unexpectedly"
 		}
-		m.notifyStateChange(accountID, entry.state, entry.lastError)
+		m.notifyStateChange(accountID, entry.state, entry.lastError, nil)
 		return
 
 	case <-probeTimer.C:
@@ -199,7 +207,7 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 		m.mu.Lock()
 		if m.entries[accountID] == entry && entry.state == StateMounting {
 			entry.state = StateMounted
-			m.notifyStateChange(accountID, StateMounted, "")
+			m.notifyStateChange(accountID, StateMounted, "", nil)
 		}
 		m.mu.Unlock()
 	}
@@ -222,7 +230,7 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 	} else {
 		entry.state = StateStopped
 	}
-	m.notifyStateChange(accountID, entry.state, entry.lastError)
+	m.notifyStateChange(accountID, entry.state, entry.lastError, nil)
 }
 
 func (m *ProcessManager) Unmount(_ context.Context, accountID string) error {
@@ -237,7 +245,7 @@ func (m *ProcessManager) Unmount(_ context.Context, accountID string) error {
 	entry.state = StateStopped
 	entry.cancel()
 	done := entry.done
-	m.notifyStateChange(accountID, StateStopped, "")
+	m.notifyStateChange(accountID, StateStopped, "", nil)
 	m.mu.Unlock()
 
 	// Wait (bounded) for process to exit.
@@ -269,9 +277,9 @@ func (m *ProcessManager) Status(_ context.Context, accountID string) (Status, er
 	}, nil
 }
 
-func (m *ProcessManager) notifyStateChange(accountID string, state State, lastError string) {
+func (m *ProcessManager) notifyStateChange(accountID string, state State, lastError string, mountErr error) {
 	if m.onStateChange != nil {
-		m.onStateChange(accountID, state, lastError)
+		m.onStateChange(accountID, state, lastError, mountErr)
 	}
 }
 

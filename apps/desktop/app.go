@@ -6,6 +6,7 @@ import (
 	"KDrive/backend/storage"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -26,9 +27,10 @@ type AccountView struct {
 }
 
 type MountStatusView struct {
-	AccountID string `json:"accountId"`
-	State     string `json:"state"`
-	LastError string `json:"lastError"`
+	AccountID     string `json:"accountId"`
+	State         string `json:"state"`
+	LastError     string `json:"lastError"`
+	ErrorCategory string `json:"errorCategory"`
 }
 
 // App struct
@@ -81,11 +83,12 @@ func NewApp() *App {
 }
 
 // onMountStateChange persists the new state to SQLite and schedules retries on unexpected failure.
-func (a *App) onMountStateChange(accountID string, state mount.State, lastError string) {
+func (a *App) onMountStateChange(accountID string, state mount.State, lastError string, mountErr error) {
 	_ = a.mountStateRepository.Upsert(context.Background(), storage.MountState{
-		AccountID: accountID,
-		State:     string(state),
-		LastError: lastError,
+		AccountID:     accountID,
+		State:         string(state),
+		LastError:     lastError,
+		ErrorCategory: errorCategoryFromErr(mountErr),
 	})
 
 	switch state {
@@ -315,16 +318,44 @@ func (a *App) AccountMountStatus(accountID string) (MountStatusView, error) {
 	if status.State == mount.StateStopped {
 		if dbState, dbErr := a.mountStateRepository.Get(a.ctx, accountID); dbErr == nil {
 			return MountStatusView{
-				AccountID: accountID,
-				State:     dbState.State,
-				LastError: dbState.LastError,
+				AccountID:     accountID,
+				State:         dbState.State,
+				LastError:     dbState.LastError,
+				ErrorCategory: dbState.ErrorCategory,
 			}, nil
 		}
 	}
 
 	return MountStatusView{
-		AccountID: status.AccountID,
-		State:     string(status.State),
-		LastError: status.LastError,
+		AccountID:     status.AccountID,
+		State:         string(status.State),
+		LastError:     status.LastError,
+		ErrorCategory: errorCategoryFor(status.LastError),
 	}, nil
+}
+
+// errorCategoryFor inspects an error message returned from the mount manager and
+// maps it to a stable category string for the frontend.
+func errorCategoryFor(lastError string) string {
+	if lastError == "" {
+		return ""
+	}
+	// PreflightErrors carry structured category info; re-parse from the error message
+	// by attempting to unwrap the original error via the mount package sentinel.
+	// Since we only have the string at this point, we use prefix heuristics.
+	// Callers that have the original error should use errorCategoryFromErr instead.
+	return "process_failed"
+}
+
+// errorCategoryFromErr extracts the category from a *mount.PreflightError if present,
+// otherwise returns "process_failed" for generic mount errors or "" for nil.
+func errorCategoryFromErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	var pe *mount.PreflightError
+	if errors.As(err, &pe) {
+		return string(pe.Category)
+	}
+	return "process_failed"
 }

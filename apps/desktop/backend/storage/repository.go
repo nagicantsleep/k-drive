@@ -25,10 +25,11 @@ type Account struct {
 }
 
 type MountState struct {
-	AccountID string
-	State     string
-	LastError string
-	UpdatedAt time.Time
+	AccountID     string
+	State         string
+	LastError     string
+	ErrorCategory string
+	UpdatedAt     time.Time
 }
 
 type AccountRepository interface {
@@ -117,11 +118,12 @@ func (r *SQLiteMountStateRepository) Upsert(ctx context.Context, state MountStat
 
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO mount_states (account_id, state, last_error, updated_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(account_id) DO UPDATE SET state = excluded.state, last_error = excluded.last_error, updated_at = excluded.updated_at`,
+		`INSERT INTO mount_states (account_id, state, last_error, error_category, updated_at) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(account_id) DO UPDATE SET state = excluded.state, last_error = excluded.last_error, error_category = excluded.error_category, updated_at = excluded.updated_at`,
 		state.AccountID,
 		state.State,
 		state.LastError,
+		state.ErrorCategory,
 		updatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -132,11 +134,11 @@ func (r *SQLiteMountStateRepository) Upsert(ctx context.Context, state MountStat
 }
 
 func (r *SQLiteMountStateRepository) Get(ctx context.Context, accountID string) (MountState, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT account_id, state, last_error, updated_at FROM mount_states WHERE account_id = ?`, accountID)
+	row := r.db.QueryRowContext(ctx, `SELECT account_id, state, last_error, error_category, updated_at FROM mount_states WHERE account_id = ?`, accountID)
 
 	var state MountState
 	var updatedAtRaw string
-	if err := row.Scan(&state.AccountID, &state.State, &state.LastError, &updatedAtRaw); err != nil {
+	if err := row.Scan(&state.AccountID, &state.State, &state.LastError, &state.ErrorCategory, &updatedAtRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return MountState{}, ErrMountStateNotFound
 		}
@@ -198,6 +200,7 @@ func createSchema(db *sql.DB) error {
 			account_id TEXT PRIMARY KEY,
 			state TEXT NOT NULL,
 			last_error TEXT NOT NULL,
+			error_category TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS secrets (
@@ -208,6 +211,9 @@ func createSchema(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("create sqlite schema: %w", err)
 	}
+
+	// Migrate: add error_category column to mount_states if it was created without it.
+	_, _ = db.Exec(`ALTER TABLE mount_states ADD COLUMN error_category TEXT NOT NULL DEFAULT ''`)
 
 	return nil
 }

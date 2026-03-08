@@ -263,7 +263,7 @@ func TestOnMountStateChange_FailedTriggersRetry(t *testing.T) {
 	}
 
 	// Simulate unexpected failure — retry count becomes 1.
-	a.onMountStateChange("acc-1", mount.StateFailed, "process died")
+	a.onMountStateChange("acc-1", mount.StateFailed, "process died", nil)
 
 	// Wait long enough for the retry goroutine (50ms * 1 = 50ms + buffer).
 	time.Sleep(200 * time.Millisecond)
@@ -303,7 +303,7 @@ func TestOnMountStateChange_ExplicitUnmountSuppressesRetry(t *testing.T) {
 	}
 
 	// Simulate an unexpected-looking failure callback (should not retry).
-	a.onMountStateChange("acc-1", mount.StateFailed, "process died")
+	a.onMountStateChange("acc-1", mount.StateFailed, "process died", nil)
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -326,7 +326,7 @@ func TestOnMountStateChange_MountedResetsRetryCount(t *testing.T) {
 	a.retryMu.Unlock()
 
 	// Callback for mounted should reset count.
-	a.onMountStateChange("acc-1", mount.StateMounted, "")
+	a.onMountStateChange("acc-1", mount.StateMounted, "", nil)
 
 	a.retryMu.Lock()
 	count := a.retryCounts["acc-1"]
