@@ -25,6 +25,7 @@ type AccountView struct {
 type MountStatusView struct {
 	AccountID string `json:"accountId"`
 	State     string `json:"state"`
+	LastError string `json:"lastError"`
 }
 
 // App struct
@@ -120,6 +121,7 @@ func (a *App) AccountMountStatus(accountID string) (MountStatusView, error) {
 	return MountStatusView{
 		AccountID: status.AccountID,
 		State:     string(status.State),
+		LastError: status.LastError,
 	}, nil
 }
 
