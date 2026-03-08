@@ -19,21 +19,8 @@ type SQLiteSecretStore struct {
 	db *sql.DB
 }
 
-func NewSecretStore() *SQLiteSecretStore {
-	store, err := NewSQLiteSecretStore(defaultDBPath())
-	if err != nil {
-		panic(err)
-	}
-	return store
-}
-
-func NewSQLiteSecretStore(dbPath string) (*SQLiteSecretStore, error) {
-	db, err := openDatabase(dbPath)
-	if err != nil {
-		return nil, err
-	}
-
-	return &SQLiteSecretStore{db: db}, nil
+func NewSQLiteSecretStore(db *sql.DB) *SQLiteSecretStore {
+	return &SQLiteSecretStore{db: db}
 }
 
 func (s *SQLiteSecretStore) Save(ctx context.Context, key string, plaintext []byte) error {

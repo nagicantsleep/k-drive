@@ -49,36 +49,12 @@ type SQLiteMountStateRepository struct {
 	db *sql.DB
 }
 
-func NewAccountRepository() *SQLiteAccountRepository {
-	repo, err := NewSQLiteAccountRepository(defaultDBPath())
-	if err != nil {
-		panic(err)
-	}
-	return repo
+func NewSQLiteAccountRepository(db *sql.DB) *SQLiteAccountRepository {
+	return &SQLiteAccountRepository{db: db}
 }
 
-func NewMountStateRepository() *SQLiteMountStateRepository {
-	repo, err := NewSQLiteMountStateRepository(defaultDBPath())
-	if err != nil {
-		panic(err)
-	}
-	return repo
-}
-
-func NewSQLiteAccountRepository(dbPath string) (*SQLiteAccountRepository, error) {
-	db, err := openDatabase(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	return &SQLiteAccountRepository{db: db}, nil
-}
-
-func NewSQLiteMountStateRepository(dbPath string) (*SQLiteMountStateRepository, error) {
-	db, err := openDatabase(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	return &SQLiteMountStateRepository{db: db}, nil
+func NewSQLiteMountStateRepository(db *sql.DB) *SQLiteMountStateRepository {
+	return &SQLiteMountStateRepository{db: db}
 }
 
 func (r *SQLiteAccountRepository) Save(ctx context.Context, account Account) error {
@@ -176,7 +152,7 @@ func (r *SQLiteMountStateRepository) Get(ctx context.Context, accountID string) 
 	return state, nil
 }
 
-func defaultDBPath() string {
+func DefaultDBPath() string {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return defaultDBFileName
@@ -184,15 +160,22 @@ func defaultDBPath() string {
 	return filepath.Join(configDir, "KDrive", defaultDBFileName)
 }
 
-func openDatabase(dbPath string) (*sql.DB, error) {
+func OpenDatabase(dbPath string) (*sql.DB, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
+	}
+
+	db.SetMaxOpenConns(1)
+
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure sqlite pragmas: %w", err)
 	}
 
 	if err := createSchema(db); err != nil {

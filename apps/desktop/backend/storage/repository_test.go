@@ -2,22 +2,34 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
+func openTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "kdrive.db")
+	db, err := OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDatabase() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
 func TestSQLiteAccountRepository_SaveList(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "kdrive.db")
-	repo, err := NewSQLiteAccountRepository(dbPath)
+
+	// Write via first db handle.
+	db1, err := OpenDatabase(dbPath)
 	if err != nil {
-		t.Fatalf("NewSQLiteAccountRepository() error = %v", err)
+		t.Fatalf("OpenDatabase(1) error = %v", err)
 	}
-	t.Cleanup(func() {
-		_ = repo.db.Close()
-	})
+	repo1 := NewSQLiteAccountRepository(db1)
 
 	account := Account{
 		ID:       "acc-1",
@@ -28,19 +40,20 @@ func TestSQLiteAccountRepository_SaveList(t *testing.T) {
 			"bucket": "team-bucket",
 		},
 	}
-	if err := repo.Save(context.Background(), account); err != nil {
+	if err := repo1.Save(context.Background(), account); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
+	_ = db1.Close()
 
-	reopenedRepo, err := NewSQLiteAccountRepository(dbPath)
+	// Reopen to verify durability.
+	db2, err := OpenDatabase(dbPath)
 	if err != nil {
-		t.Fatalf("reopen NewSQLiteAccountRepository() error = %v", err)
+		t.Fatalf("OpenDatabase(reopen) error = %v", err)
 	}
-	t.Cleanup(func() {
-		_ = reopenedRepo.db.Close()
-	})
+	t.Cleanup(func() { _ = db2.Close() })
+	repo2 := NewSQLiteAccountRepository(db2)
 
-	accounts, err := reopenedRepo.List(context.Background())
+	accounts, err := repo2.List(context.Background())
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -61,14 +74,8 @@ func TestSQLiteAccountRepository_SaveList(t *testing.T) {
 func TestSQLiteMountStateRepository_UpsertGet(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "kdrive.db")
-	repo, err := NewSQLiteMountStateRepository(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteMountStateRepository() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = repo.db.Close()
-	})
+	db := openTestDB(t)
+	repo := NewSQLiteMountStateRepository(db)
 
 	if _, err := repo.Get(context.Background(), "missing"); err != ErrMountStateNotFound {
 		t.Fatalf("Get(missing) error = %v, want %v", err, ErrMountStateNotFound)

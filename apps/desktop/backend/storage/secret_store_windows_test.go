@@ -5,21 +5,14 @@ package storage
 import (
 	"bytes"
 	"context"
-	"path/filepath"
 	"testing"
 )
 
 func TestSQLiteSecretStore_SaveLoadDelete(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "kdrive.db")
-	store, err := NewSQLiteSecretStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteSecretStore() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = store.db.Close()
-	})
+	db := openTestDB(t)
+	store := NewSQLiteSecretStore(db)
 
 	key := "account/acc-1/access-key"
 	plaintext := []byte("super-secret-value")
