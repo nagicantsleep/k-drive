@@ -3,9 +3,13 @@ package mount
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"regexp"
 	"sync"
 	"time"
+
+	"KDrive/backend/connectors"
 )
 
 type State string
@@ -24,6 +28,8 @@ type Status struct {
 }
 
 type Manager interface {
+	WriteConfig(remote connectors.RemoteConfig) error
+	DeleteConfig(remoteName string) error
 	Mount(ctx context.Context, accountID string) error
 	Unmount(ctx context.Context, accountID string) error
 	Status(ctx context.Context, accountID string) (Status, error)
@@ -34,10 +40,11 @@ type mountEntry struct {
 	lastError string
 	cmd       *exec.Cmd
 	cancel    context.CancelFunc
+	done      chan struct{}
 }
 
 type ProcessManager struct {
-	mu           sync.RWMutex
+	mu           sync.Mutex
 	entries      map[string]*mountEntry
 	configMgr    *ConfigManager
 	rclonePath   string
@@ -72,6 +79,14 @@ func newProcessManager(cfg ProcessManagerConfig) *ProcessManager {
 	}
 }
 
+func (m *ProcessManager) WriteConfig(remote connectors.RemoteConfig) error {
+	return m.configMgr.WriteRemote(remote.Name, remote.Type, remote.Options)
+}
+
+func (m *ProcessManager) DeleteConfig(remoteName string) error {
+	return m.configMgr.DeleteRemote(remoteName)
+}
+
 func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -80,9 +95,25 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 		if entry.state == StateMounting || entry.state == StateMounted {
 			return nil
 		}
+		// Wait for any in-flight stop to complete before remounting.
+		if entry.done != nil {
+			done := entry.done
+			m.mu.Unlock()
+			select {
+			case <-done:
+			case <-ctx.Done():
+				m.mu.Lock()
+				return ctx.Err()
+			}
+			m.mu.Lock()
+		}
 	}
 
 	mountPoint := mountPointPath(m.mountBaseDir, accountID)
+	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+		return fmt.Errorf("create mount point: %w", err)
+	}
+
 	remoteName := fmt.Sprintf("s3-%s", accountID)
 
 	cmdCtx, cancel := context.WithCancel(context.Background())
@@ -97,37 +128,74 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 
 	cmd := exec.CommandContext(cmdCtx, m.rclonePath, args...)
 
+	done := make(chan struct{})
 	entry := &mountEntry{
 		state:  StateMounting,
 		cmd:    cmd,
 		cancel: cancel,
+		done:   done,
 	}
 	m.entries[accountID] = entry
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		close(done)
 		entry.state = StateFailed
 		entry.lastError = err.Error()
 		return fmt.Errorf("start rclone mount: %w", err)
 	}
 
-	go m.watchProcess(accountID, entry, cmd)
+	go m.watchProcess(accountID, entry, cmd, done)
 
 	return nil
 }
 
-func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *exec.Cmd) {
-	// Allow brief startup window before declaring mounted.
-	time.Sleep(500 * time.Millisecond)
+// watchProcess waits for rclone to either stabilize or exit.
+// It uses a short probe window: if the process is still running after the window, it is considered mounted.
+func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *exec.Cmd, done chan struct{}) {
+	defer close(done)
 
-	m.mu.Lock()
-	if m.entries[accountID] == entry && entry.state == StateMounting {
-		entry.state = StateMounted
+	// Channel receives the process exit error (or nil) when Wait returns.
+	exitCh := make(chan error, 1)
+	go func() {
+		exitCh <- cmd.Wait()
+	}()
+
+	// Probe window: if still running after 1s, declare mounted.
+	probeTimer := time.NewTimer(1 * time.Second)
+	defer probeTimer.Stop()
+
+	select {
+	case err := <-exitCh:
+		// Process exited before probe window — treat as failure.
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.entries[accountID] != entry {
+			return
+		}
+		if entry.state == StateStopped {
+			return
+		}
+		if err != nil {
+			entry.state = StateFailed
+			entry.lastError = err.Error()
+		} else {
+			entry.state = StateFailed
+			entry.lastError = "rclone exited unexpectedly"
+		}
+		return
+
+	case <-probeTimer.C:
+		// Process survived probe window — mark mounted.
+		m.mu.Lock()
+		if m.entries[accountID] == entry && entry.state == StateMounting {
+			entry.state = StateMounted
+		}
+		m.mu.Unlock()
 	}
-	m.mu.Unlock()
 
-	// Block on process exit.
-	err := cmd.Wait()
+	// Now wait for eventual process exit (stopped or failed).
+	err := <-exitCh
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -135,11 +203,9 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 	if m.entries[accountID] != entry {
 		return
 	}
-
 	if entry.state == StateStopped {
 		return
 	}
-
 	if err != nil {
 		entry.state = StateFailed
 		entry.lastError = err.Error()
@@ -150,22 +216,34 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 
 func (m *ProcessManager) Unmount(_ context.Context, accountID string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	entry, ok := m.entries[accountID]
 	if !ok {
+		m.mu.Unlock()
 		return nil
 	}
 
 	entry.state = StateStopped
 	entry.cancel()
+	done := entry.done
+	m.mu.Unlock()
+
+	// Wait (bounded) for process to exit.
+	if done != nil {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+		}
+	}
 
 	return nil
 }
 
 func (m *ProcessManager) Status(_ context.Context, accountID string) (Status, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	entry, ok := m.entries[accountID]
 	if !ok {
@@ -179,10 +257,12 @@ func (m *ProcessManager) Status(_ context.Context, accountID string) (Status, er
 	}, nil
 }
 
+var safeAccountIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 func defaultMountBaseDir() string {
 	return `C:\KDrive`
 }
 
 func mountPointPath(baseDir, accountID string) string {
-	return fmt.Sprintf("%s\\%s", baseDir, accountID)
+	return fmt.Sprintf(`%s\%s`, baseDir, accountID)
 }

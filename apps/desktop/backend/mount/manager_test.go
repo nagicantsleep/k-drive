@@ -7,14 +7,18 @@ import (
 	"time"
 )
 
-func TestProcessManager_StatusDefaultStopped(t *testing.T) {
-	t.Parallel()
-
-	manager := newProcessManager(ProcessManagerConfig{
+func newTestManager(t *testing.T, rclonePath string) *ProcessManager {
+	t.Helper()
+	return newProcessManager(ProcessManagerConfig{
 		ConfigManager: NewConfigManagerAt(filepath.Join(t.TempDir(), "rclone.conf")),
-		RclonePath:    `C:\WINDOWS\system32\cmd.exe`,
+		RclonePath:    rclonePath,
 		MountBaseDir:  t.TempDir(),
 	})
+}
+
+func TestProcessManager_StatusDefaultStopped(t *testing.T) {
+	t.Parallel()
+	manager := newTestManager(t, `C:\WINDOWS\system32\cmd.exe`)
 
 	status, err := manager.Status(context.Background(), "acc-nonexistent")
 	if err != nil {
@@ -27,24 +31,19 @@ func TestProcessManager_StatusDefaultStopped(t *testing.T) {
 
 func TestProcessManager_MountUnmount_StateTransitions(t *testing.T) {
 	t.Parallel()
-
-	manager := newProcessManager(ProcessManagerConfig{
-		ConfigManager: NewConfigManagerAt(filepath.Join(t.TempDir(), "rclone.conf")),
-		RclonePath:    `C:\WINDOWS\system32\cmd.exe`,
-		MountBaseDir:  t.TempDir(),
-	})
+	manager := newTestManager(t, `C:\WINDOWS\system32\cmd.exe`)
 
 	if err := manager.Mount(context.Background(), "acc-1"); err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
 
-	time.Sleep(800 * time.Millisecond)
+	// cmd.exe exits quickly — it should land on failed (exited before probe window).
+	time.Sleep(1500 * time.Millisecond)
 
 	status, err := manager.Status(context.Background(), "acc-1")
 	if err != nil {
 		t.Fatalf("Status(after mount) error = %v", err)
 	}
-	// cmd.exe exits quickly since no real mount happens; state will be stopped/failed/mounted.
 	if status.AccountID != "acc-1" {
 		t.Fatalf("Status().AccountID = %q, want acc-1", status.AccountID)
 	}
@@ -64,12 +63,7 @@ func TestProcessManager_MountUnmount_StateTransitions(t *testing.T) {
 
 func TestProcessManager_MountFailure_BadBinary(t *testing.T) {
 	t.Parallel()
-
-	manager := newProcessManager(ProcessManagerConfig{
-		ConfigManager: NewConfigManagerAt(filepath.Join(t.TempDir(), "rclone.conf")),
-		RclonePath:    `nonexistent-binary-kdrive-test`,
-		MountBaseDir:  t.TempDir(),
-	})
+	manager := newTestManager(t, `nonexistent-binary-kdrive-test`)
 
 	err := manager.Mount(context.Background(), "acc-1")
 	if err == nil {
@@ -85,5 +79,26 @@ func TestProcessManager_MountFailure_BadBinary(t *testing.T) {
 	}
 	if status.LastError == "" {
 		t.Fatalf("Status().LastError is empty, want non-empty")
+	}
+}
+
+func TestProcessManager_FastExit_MarkedFailed(t *testing.T) {
+	t.Parallel()
+	manager := newTestManager(t, `C:\WINDOWS\system32\cmd.exe`)
+
+	// cmd.exe exits nearly immediately — should end up failed, not mounted.
+	if err := manager.Mount(context.Background(), "acc-1"); err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+
+	// Wait enough for the probe window + process exit to resolve.
+	time.Sleep(1500 * time.Millisecond)
+
+	status, err := manager.Status(context.Background(), "acc-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.State == StateMounted {
+		t.Fatalf("Status().State = %q after fast exit, want stopped or failed", status.State)
 	}
 }
