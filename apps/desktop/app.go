@@ -33,7 +33,8 @@ type App struct {
 	connectorRegistry connectors.Registry
 	mountManager      mount.Manager
 	authService       auth.Service
-	accountRepository storage.AccountRepository
+	accountRepository    storage.AccountRepository
+	mountStateRepository storage.MountStateRepository
 }
 
 // NewApp creates a new App application struct
@@ -42,10 +43,11 @@ func NewApp() *App {
 	registry.Register(connectors.NewS3Connector())
 
 	return &App{
-		connectorRegistry: registry,
-		mountManager:      mount.NewManager(),
-		authService:       auth.NewService(),
-		accountRepository: storage.NewAccountRepository(),
+		connectorRegistry:    registry,
+		mountManager:         mount.NewManager(),
+		authService:          auth.NewService(),
+		accountRepository:    storage.NewAccountRepository(),
+		mountStateRepository: storage.NewMountStateRepository(),
 	}
 }
 
