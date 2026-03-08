@@ -217,6 +217,10 @@ func createSchema(db *sql.DB) error {
 			last_error TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS secrets (
+			key TEXT PRIMARY KEY,
+			ciphertext BLOB NOT NULL
+		);
 	`)
 	if err != nil {
 		return fmt.Errorf("create sqlite schema: %w", err)

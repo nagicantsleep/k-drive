@@ -29,12 +29,13 @@ type MountStatusView struct {
 
 // App struct
 type App struct {
-	ctx               context.Context
-	connectorRegistry connectors.Registry
-	mountManager      mount.Manager
-	authService       auth.Service
+	ctx                  context.Context
+	connectorRegistry    connectors.Registry
+	mountManager         mount.Manager
+	authService          auth.Service
 	accountRepository    storage.AccountRepository
 	mountStateRepository storage.MountStateRepository
+	secretStore          storage.SecretStore
 }
 
 // NewApp creates a new App application struct
@@ -48,6 +49,7 @@ func NewApp() *App {
 		authService:          auth.NewService(),
 		accountRepository:    storage.NewAccountRepository(),
 		mountStateRepository: storage.NewMountStateRepository(),
+		secretStore:          storage.NewSecretStore(),
 	}
 }
 
