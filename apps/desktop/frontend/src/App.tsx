@@ -1,28 +1,104 @@
-import {useState} from 'react';
-import logo from './assets/images/logo-universal.png';
+import { FormEvent, useEffect, useState } from 'react';
 import './App.css';
-import {Greet} from "../wailsjs/go/main/App";
+
+type Account = {
+  id: string;
+  provider: string;
+  email: string;
+  options: Record<string, string>;
+};
+
+type MountStatus = {
+  accountId: string;
+  state: string;
+};
 
 function App() {
-    const [resultText, setResultText] = useState("Please enter your name below 👇");
-    const [name, setName] = useState('');
-    const updateName = (e: any) => setName(e.target.value);
-    const updateResultText = (result: string) => setResultText(result);
+  const [accountId, setAccountId] = useState('');
+  const [email, setEmail] = useState('');
+  const [bucket, setBucket] = useState('');
+  const [region, setRegion] = useState('');
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [statuses, setStatuses] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState('');
 
-    function greet() {
-        Greet(name).then(updateResultText);
+  async function refreshAccounts() {
+    const nextAccounts = (await (window as any).go.main.App.ListAccounts()) as Account[];
+    setAccounts(nextAccounts);
+
+    const nextStatuses: Record<string, string> = {};
+    for (const account of nextAccounts) {
+      const status = (await (window as any).go.main.App.AccountMountStatus(account.id)) as MountStatus;
+      nextStatuses[account.id] = status.state;
     }
+    setStatuses(nextStatuses);
+  }
 
-    return (
-        <div id="App">
-            <img src={logo} id="logo" alt="logo"/>
-            <div id="result" className="result">{resultText}</div>
-            <div id="input" className="input-box">
-                <input id="name" className="input" onChange={updateName} autoComplete="off" name="input" type="text"/>
-                <button className="btn" onClick={greet}>Greet</button>
+  useEffect(() => {
+    void refreshAccounts();
+  }, []);
+
+  async function onCreateAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await (window as any).go.main.App.CreateS3Account({
+      accountId,
+      email,
+      options: {
+        bucket,
+        region,
+      },
+    });
+    setMessage('S3 account created.');
+    setAccountId('');
+    setEmail('');
+    setBucket('');
+    setRegion('');
+    await refreshAccounts();
+  }
+
+  async function mountAccount(id: string) {
+    await (window as any).go.main.App.MountAccount(id);
+    const status = (await (window as any).go.main.App.AccountMountStatus(id)) as MountStatus;
+    setStatuses((prev) => ({ ...prev, [id]: status.state }));
+  }
+
+  async function unmountAccount(id: string) {
+    await (window as any).go.main.App.UnmountAccount(id);
+    const status = (await (window as any).go.main.App.AccountMountStatus(id)) as MountStatus;
+    setStatuses((prev) => ({ ...prev, [id]: status.state }));
+  }
+
+  return (
+    <div className="app">
+      <h1>K-Drive S3 Vertical Slice</h1>
+      <form className="account-form" onSubmit={onCreateAccount}>
+        <input value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder="Account ID" required />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required />
+        <input value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="S3 bucket" required />
+        <input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Region" required />
+        <button type="submit">Add S3 Account</button>
+      </form>
+
+      {message && <p className="message">{message}</p>}
+
+      <ul className="account-list">
+        {accounts.map((account) => (
+          <li key={account.id}>
+            <div>
+              <strong>{account.id}</strong> ({account.provider}) - {account.email}
             </div>
-        </div>
-    )
+            <div>Bucket: {account.options.bucket} | Region: {account.options.region}</div>
+            <div>Status: {statuses[account.id] ?? 'stopped'}</div>
+            <div className="actions">
+              <button type="button" onClick={() => mountAccount(account.id)}>Mount</button>
+              <button type="button" onClick={() => unmountAccount(account.id)}>Unmount</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
-export default App
+export default App;
+

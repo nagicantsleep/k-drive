@@ -6,6 +6,7 @@ type Account struct {
 	ID       string
 	Provider string
 	Email    string
+	Options  map[string]string
 }
 
 type AccountRepository interface {
@@ -22,12 +23,24 @@ func NewAccountRepository() *MemoryAccountRepository {
 }
 
 func (r *MemoryAccountRepository) Save(_ context.Context, account Account) error {
+	copiedOptions := make(map[string]string)
+	for key, value := range account.Options {
+		copiedOptions[key] = value
+	}
+	account.Options = copiedOptions
 	r.accounts = append(r.accounts, account)
 	return nil
 }
 
 func (r *MemoryAccountRepository) List(_ context.Context) ([]Account, error) {
-	result := make([]Account, len(r.accounts))
-	copy(result, r.accounts)
+	result := make([]Account, 0, len(r.accounts))
+	for _, account := range r.accounts {
+		copiedOptions := make(map[string]string)
+		for key, value := range account.Options {
+			copiedOptions[key] = value
+		}
+		account.Options = copiedOptions
+		result = append(result, account)
+	}
 	return result, nil
 }
