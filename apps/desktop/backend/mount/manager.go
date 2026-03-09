@@ -21,9 +21,10 @@ const (
 )
 
 type Status struct {
-	AccountID string
-	State     State
-	LastError string
+	AccountID     string
+	State         State
+	LastError     string
+	ErrorCategory string
 }
 
 type Manager interface {
@@ -35,11 +36,12 @@ type Manager interface {
 }
 
 type mountEntry struct {
-	state     State
-	lastError string
-	cmd       *exec.Cmd
-	cancel    context.CancelFunc
-	done      chan struct{}
+	state         State
+	lastError     string
+	errorCategory string
+	cmd           *exec.Cmd
+	cancel        context.CancelFunc
+	done          chan struct{}
 }
 
 type ProcessManager struct {
@@ -116,7 +118,11 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 	}
 
 	if err := runPreflight(m.rclonePath, m.mountBaseDir); err != nil {
-		entry := &mountEntry{state: StateFailed, lastError: err.Error()}
+		entry := &mountEntry{
+			state:         StateFailed,
+			lastError:     err.Error(),
+			errorCategory: preflightCategory(err),
+		}
 		m.entries[accountID] = entry
 		m.notifyStateChange(accountID, StateFailed, entry.lastError, err)
 		return err
@@ -156,6 +162,7 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 		close(done)
 		entry.state = StateFailed
 		entry.lastError = err.Error()
+		entry.errorCategory = "process_failed"
 		startErr := fmt.Errorf("start rclone mount: %w", err)
 		m.notifyStateChange(accountID, StateFailed, entry.lastError, startErr)
 		return startErr
@@ -195,9 +202,11 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 		if err != nil {
 			entry.state = StateFailed
 			entry.lastError = err.Error()
+			entry.errorCategory = "process_failed"
 		} else {
 			entry.state = StateFailed
 			entry.lastError = "rclone exited unexpectedly"
+			entry.errorCategory = "process_failed"
 		}
 		m.notifyStateChange(accountID, entry.state, entry.lastError, nil)
 		return
@@ -207,6 +216,8 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 		m.mu.Lock()
 		if m.entries[accountID] == entry && entry.state == StateMounting {
 			entry.state = StateMounted
+			entry.lastError = ""
+			entry.errorCategory = ""
 			m.notifyStateChange(accountID, StateMounted, "", nil)
 		}
 		m.mu.Unlock()
@@ -227,8 +238,11 @@ func (m *ProcessManager) watchProcess(accountID string, entry *mountEntry, cmd *
 	if err != nil {
 		entry.state = StateFailed
 		entry.lastError = err.Error()
+		entry.errorCategory = "process_failed"
 	} else {
 		entry.state = StateStopped
+		entry.lastError = ""
+		entry.errorCategory = ""
 	}
 	m.notifyStateChange(accountID, entry.state, entry.lastError, nil)
 }
@@ -243,7 +257,11 @@ func (m *ProcessManager) Unmount(_ context.Context, accountID string) error {
 	}
 
 	entry.state = StateStopped
-	entry.cancel()
+	entry.lastError = ""
+	entry.errorCategory = ""
+	if entry.cancel != nil {
+		entry.cancel()
+	}
 	done := entry.done
 	m.notifyStateChange(accountID, StateStopped, "", nil)
 	m.mu.Unlock()
@@ -271,9 +289,10 @@ func (m *ProcessManager) Status(_ context.Context, accountID string) (Status, er
 	}
 
 	return Status{
-		AccountID: accountID,
-		State:     entry.state,
-		LastError: entry.lastError,
+		AccountID:     accountID,
+		State:         entry.state,
+		LastError:     entry.lastError,
+		ErrorCategory: entry.errorCategory,
 	}, nil
 }
 

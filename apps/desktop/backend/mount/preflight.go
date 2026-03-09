@@ -1,6 +1,7 @@
 package mount
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,14 @@ type PreflightError struct {
 
 func (e *PreflightError) Error() string {
 	return e.Message
+}
+
+func preflightCategory(err error) string {
+	var pe *PreflightError
+	if errors.As(err, &pe) {
+		return string(pe.Category)
+	}
+	return ""
 }
 
 // runPreflight checks rclone availability, WinFsp (platform-specific), and mount

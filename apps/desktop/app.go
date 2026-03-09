@@ -88,11 +88,14 @@ func (a *App) onMountStateChange(accountID string, state mount.State, lastError 
 		AccountID:     accountID,
 		State:         string(state),
 		LastError:     lastError,
-		ErrorCategory: errorCategoryFromErr(mountErr),
+		ErrorCategory: classifyMountError(state, lastError, mountErr),
 	})
 
 	switch state {
 	case mount.StateFailed:
+		if classifyMountError(state, lastError, mountErr) != "process_failed" {
+			return
+		}
 		a.retryMu.Lock()
 		if a.stoppedByUser[accountID] {
 			a.retryMu.Unlock()
@@ -110,7 +113,9 @@ func (a *App) onMountStateChange(accountID string, state mount.State, lastError 
 				skip := a.stoppedByUser[accountID]
 				a.retryMu.Unlock()
 				if !skip {
-					_ = a.doMount(accountID)
+					if err := a.doMount(accountID); err != nil {
+						a.persistMountFailure(accountID, err)
+					}
 				}
 			}()
 		}
@@ -154,12 +159,7 @@ func (a *App) autoRemountOnStartup() {
 
 		go func() {
 			if err := a.doMount(accountID); err != nil {
-				_ = a.mountStateRepository.Upsert(context.Background(), storage.MountState{
-					AccountID:     accountID,
-					State:         string(mount.StateFailed),
-					LastError:     err.Error(),
-					ErrorCategory: errorCategoryFromErr(err),
-				})
+				a.persistMountFailure(accountID, err)
 			}
 		}()
 	}
@@ -252,7 +252,11 @@ func (a *App) MountAccount(accountID string) error {
 	a.retryCounts[accountID] = 0
 	a.retryMu.Unlock()
 
-	return a.doMount(accountID)
+	err := a.doMount(accountID)
+	if err != nil {
+		a.persistMountFailure(accountID, err)
+	}
+	return err
 }
 
 // doMount is the shared implementation used by MountAccount, startup recovery, and retry goroutines.
@@ -307,8 +311,8 @@ func (a *App) doMount(accountID string) error {
 // configInvalidError wraps config-validation failures so errorCategoryFromErr can classify them.
 type configInvalidError struct{ cause error }
 
-func (e *configInvalidError) Error() string  { return e.cause.Error() }
-func (e *configInvalidError) Unwrap() error  { return e.cause }
+func (e *configInvalidError) Error() string { return e.cause.Error() }
+func (e *configInvalidError) Unwrap() error { return e.cause }
 
 func (a *App) UnmountAccount(accountID string) error {
 	if err := connectors.ValidateAccountID(accountID); err != nil {
@@ -354,21 +358,28 @@ func (a *App) AccountMountStatus(accountID string) (MountStatusView, error) {
 		AccountID:     status.AccountID,
 		State:         string(status.State),
 		LastError:     status.LastError,
-		ErrorCategory: errorCategoryFor(status.LastError),
+		ErrorCategory: status.ErrorCategory,
 	}, nil
 }
 
-// errorCategoryFor inspects an error message returned from the mount manager and
-// maps it to a stable category string for the frontend.
-func errorCategoryFor(lastError string) string {
-	if lastError == "" {
-		return ""
+func (a *App) persistMountFailure(accountID string, err error) {
+	_ = a.mountStateRepository.Upsert(context.Background(), storage.MountState{
+		AccountID:     accountID,
+		State:         string(mount.StateFailed),
+		LastError:     err.Error(),
+		ErrorCategory: classifyMountError(mount.StateFailed, err.Error(), err),
+	})
+}
+
+func classifyMountError(state mount.State, lastError string, err error) string {
+	category := errorCategoryFromErr(err)
+	if category != "" {
+		return category
 	}
-	// PreflightErrors carry structured category info; re-parse from the error message
-	// by attempting to unwrap the original error via the mount package sentinel.
-	// Since we only have the string at this point, we use prefix heuristics.
-	// Callers that have the original error should use errorCategoryFromErr instead.
-	return "process_failed"
+	if state == mount.StateFailed && lastError != "" {
+		return "process_failed"
+	}
+	return ""
 }
 
 // errorCategoryFromErr extracts the category from a *mount.PreflightError if present,

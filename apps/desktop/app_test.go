@@ -42,9 +42,11 @@ func (s *stubSecretStore) Delete(_ context.Context, key string) error {
 
 // stubMountManager records calls to WriteConfig and Mount.
 type stubMountManager struct {
-	writtenConfigs []connectors.RemoteConfig
-	mountedIDs     []string
-	statuses       map[string]mount.State
+	writtenConfigs  []connectors.RemoteConfig
+	mountedIDs      []string
+	statuses        map[string]mount.State
+	lastErrors      map[string]string
+	errorCategories map[string]string
 }
 
 func (m *stubMountManager) WriteConfig(remote connectors.RemoteConfig) error {
@@ -64,7 +66,12 @@ func (m *stubMountManager) Unmount(_ context.Context, _ string) error { return n
 func (m *stubMountManager) Status(_ context.Context, accountID string) (mount.Status, error) {
 	if m.statuses != nil {
 		if s, ok := m.statuses[accountID]; ok {
-			return mount.Status{AccountID: accountID, State: s}, nil
+			return mount.Status{
+				AccountID:     accountID,
+				State:         s,
+				LastError:     m.lastErrors[accountID],
+				ErrorCategory: m.errorCategories[accountID],
+			}, nil
 		}
 	}
 	return mount.Status{AccountID: accountID, State: mount.StateStopped}, nil
@@ -420,6 +427,40 @@ func TestErrorCategoryFromErr_ConfigInvalid(t *testing.T) {
 	}
 }
 
+func TestMountAccount_ConfigInvalidPersistsFailedState(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	db := openAppTestDB(t)
+	a := newTestApp(db, stub, &stubMountManager{})
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID: "acc-nokey", Provider: "s3", Email: "u@example.com",
+		Options: map[string]string{"endpoint": "https://s3.example.com", "region": "us-east-1"},
+	}); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	err := a.MountAccount("acc-nokey")
+	if err == nil {
+		t.Fatal("MountAccount(missing credentials) expected error, got nil")
+	}
+
+	view, viewErr := a.AccountMountStatus("acc-nokey")
+	if viewErr != nil {
+		t.Fatalf("AccountMountStatus error = %v", viewErr)
+	}
+	if view.State != string(mount.StateFailed) {
+		t.Fatalf("State = %q, want %q", view.State, mount.StateFailed)
+	}
+	if view.ErrorCategory != "config_invalid" {
+		t.Fatalf("ErrorCategory = %q, want config_invalid", view.ErrorCategory)
+	}
+	if view.LastError == "" {
+		t.Fatal("LastError is empty, want non-empty")
+	}
+}
+
 func TestAccountMountStatus_FallsBackToSQLite(t *testing.T) {
 	t.Parallel()
 
@@ -476,6 +517,45 @@ func TestAccountMountStatus_LiveStateOverridesSQLite(t *testing.T) {
 	}
 	if view.State != string(mount.StateMounted) {
 		t.Fatalf("State = %q, want %q (live wins over SQLite)", view.State, mount.StateMounted)
+	}
+}
+
+func TestAccountMountStatus_LiveFailedStateUsesManagerCategory(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	db := openAppTestDB(t)
+	mgr := &stubMountManager{
+		statuses: map[string]mount.State{
+			"acc-1": mount.StateFailed,
+		},
+		lastErrors: map[string]string{
+			"acc-1": "rclone not found",
+		},
+		errorCategories: map[string]string{
+			"acc-1": string(mount.PreflightDependencyMissing),
+		},
+	}
+	a := newTestApp(db, stub, mgr)
+
+	if err := a.mountStateRepository.Upsert(context.Background(), storage.MountState{
+		AccountID:     "acc-1",
+		State:         string(mount.StateFailed),
+		LastError:     "stale process error",
+		ErrorCategory: "process_failed",
+	}); err != nil {
+		t.Fatalf("Upsert error = %v", err)
+	}
+
+	view, err := a.AccountMountStatus("acc-1")
+	if err != nil {
+		t.Fatalf("AccountMountStatus error = %v", err)
+	}
+	if view.State != string(mount.StateFailed) {
+		t.Fatalf("State = %q, want %q", view.State, mount.StateFailed)
+	}
+	if view.ErrorCategory != string(mount.PreflightDependencyMissing) {
+		t.Fatalf("ErrorCategory = %q, want %q", view.ErrorCategory, mount.PreflightDependencyMissing)
 	}
 }
 
@@ -542,6 +622,17 @@ func TestLifecycle_AddMountUnmountRetry(t *testing.T) {
 	if cat == "" {
 		t.Fatalf("errorCategoryFromErr returned empty for a non-nil error")
 	}
+
+	view, viewErr := a.AccountMountStatus("acc-lifecycle")
+	if viewErr != nil {
+		t.Fatalf("AccountMountStatus error = %v", viewErr)
+	}
+	if view.State != string(mount.StateFailed) {
+		t.Fatalf("State = %q, want %q", view.State, mount.StateFailed)
+	}
+	if view.ErrorCategory != "process_failed" {
+		t.Fatalf("ErrorCategory = %q, want process_failed", view.ErrorCategory)
+	}
 }
 
 // TestRetryCount_ResetsOnSuccessfulMount verifies retry counters reset on mount success.
@@ -590,4 +681,35 @@ func TestPreflight_DependencyMissingCategory(t *testing.T) {
 		t.Fatalf("category = %q, want %q", cat, mount.PreflightDependencyMissing)
 	}
 	_ = a // suppress unused warning
+}
+
+func TestOnMountStateChange_NonProcessFailureDoesNotRetry(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	stub.data["account/acc-1/access_key_id"] = []byte("KEY1")
+	stub.data["account/acc-1/secret_access_key"] = []byte("SEC1")
+
+	db := openAppTestDB(t)
+	mgr := &stubMountManager{}
+	a := newTestApp(db, stub, mgr)
+	a.retryBaseDelay = 50 * time.Millisecond
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID: "acc-1", Provider: "s3", Email: "u@example.com",
+		Options: map[string]string{"endpoint": "https://s3.example.com", "region": "us-east-1"},
+	}); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	a.onMountStateChange("acc-1", mount.StateFailed, "rclone not found", &mount.PreflightError{
+		Category: mount.PreflightDependencyMissing,
+		Message:  "rclone not found",
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	if len(mgr.mountedIDs) != 0 {
+		t.Fatalf("unexpected retry for dependency failure; mountedIDs = %v", mgr.mountedIDs)
+	}
 }

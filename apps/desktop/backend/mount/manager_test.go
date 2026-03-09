@@ -102,3 +102,31 @@ func TestProcessManager_FastExit_MarkedFailed(t *testing.T) {
 		t.Fatalf("Status().State = %q after fast exit, want stopped or failed", status.State)
 	}
 }
+
+func TestProcessManager_UnmountAfterPreflightFailure_SafeStoppedState(t *testing.T) {
+	t.Parallel()
+	manager := newTestManager(t, `nonexistent-binary-kdrive-test`)
+
+	err := manager.Mount(context.Background(), "acc-1")
+	if err == nil {
+		t.Fatal("Mount() expected preflight error, got nil")
+	}
+
+	if unmountErr := manager.Unmount(context.Background(), "acc-1"); unmountErr != nil {
+		t.Fatalf("Unmount() error = %v", unmountErr)
+	}
+
+	status, statErr := manager.Status(context.Background(), "acc-1")
+	if statErr != nil {
+		t.Fatalf("Status() error = %v", statErr)
+	}
+	if status.State != StateStopped {
+		t.Fatalf("Status().State = %q, want %q", status.State, StateStopped)
+	}
+	if status.LastError != "" {
+		t.Fatalf("Status().LastError = %q, want empty", status.LastError)
+	}
+	if status.ErrorCategory != "" {
+		t.Fatalf("Status().ErrorCategory = %q, want empty", status.ErrorCategory)
+	}
+}
