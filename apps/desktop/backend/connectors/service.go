@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -40,14 +41,31 @@ type RemoteConfig struct {
 	Options map[string]string
 }
 
+type CapabilityField struct {
+	Key         string
+	Label       string
+	Placeholder string
+	Required    bool
+	Secret      bool
+}
+
+type ProviderCapability struct {
+	Provider Provider
+	Label    string
+	Fields   []CapabilityField
+}
+
 type Connector interface {
 	Provider() Provider
+	Capability() ProviderCapability
+	RemoteName(accountID string) string
 	BuildRemoteConfig(ctx context.Context, account AccountConfig) (RemoteConfig, error)
 }
 
 type Registry interface {
 	Register(connector Connector)
 	Get(provider Provider) (Connector, bool)
+	List() []Connector
 }
 
 type InMemoryRegistry struct {
@@ -67,6 +85,31 @@ func (r *InMemoryRegistry) Get(provider Provider) (Connector, bool) {
 	return connector, ok
 }
 
+func (r *InMemoryRegistry) List() []Connector {
+	providers := make([]string, 0, len(r.connectors))
+	for provider := range r.connectors {
+		providers = append(providers, string(provider))
+	}
+	sort.Strings(providers)
+
+	connectors := make([]Connector, 0, len(providers))
+	for _, provider := range providers {
+		connectors = append(connectors, r.connectors[Provider(provider)])
+	}
+
+	return connectors
+}
+
+func SecretKeys(capability ProviderCapability) []string {
+	keys := make([]string, 0)
+	for _, field := range capability.Fields {
+		if field.Secret {
+			keys = append(keys, field.Key)
+		}
+	}
+	return keys
+}
+
 type S3Connector struct{}
 
 func NewS3Connector() *S3Connector {
@@ -75,6 +118,24 @@ func NewS3Connector() *S3Connector {
 
 func (c *S3Connector) Provider() Provider {
 	return ProviderS3
+}
+
+func (c *S3Connector) Capability() ProviderCapability {
+	return ProviderCapability{
+		Provider: ProviderS3,
+		Label:    "S3-Compatible",
+		Fields: []CapabilityField{
+			{Key: "endpoint", Label: "Endpoint URL", Placeholder: "S3 endpoint URL", Required: true},
+			{Key: "region", Label: "Region", Placeholder: "Region", Required: true},
+			{Key: "bucket", Label: "Bucket", Placeholder: "Bucket (optional)"},
+			{Key: "access_key_id", Label: "Access Key ID", Placeholder: "Access Key ID", Required: true, Secret: true},
+			{Key: "secret_access_key", Label: "Secret Access Key", Placeholder: "Secret Access Key", Required: true, Secret: true},
+		},
+	}
+}
+
+func (c *S3Connector) RemoteName(accountID string) string {
+	return fmt.Sprintf("s3-%s", accountID)
 }
 
 func (c *S3Connector) BuildRemoteConfig(_ context.Context, account AccountConfig) (RemoteConfig, error) {
@@ -113,7 +174,7 @@ func (c *S3Connector) BuildRemoteConfig(_ context.Context, account AccountConfig
 	}
 
 	return RemoteConfig{
-		Name:    fmt.Sprintf("s3-%s", account.AccountID),
+		Name:    c.RemoteName(account.AccountID),
 		Type:    string(ProviderS3),
 		Options: normalized,
 	}, nil

@@ -110,15 +110,16 @@ func newTestApp(db *sql.DB, secretStore storage.SecretStore, mountMgr mount.Mana
 	return a
 }
 
-func TestCreateS3Account_SecretSplitting(t *testing.T) {
+func TestCreateAccount_SecretSplitting(t *testing.T) {
 	t.Parallel()
 
 	stub := newStubSecretStore()
 	db := openAppTestDB(t)
 	a := newTestApp(db, stub, &stubMountManager{})
 
-	view, err := a.CreateS3Account(CreateS3AccountRequest{
+	view, err := a.CreateAccount(CreateAccountRequest{
 		AccountID: "acc-test",
+		Provider:  string(connectors.ProviderS3),
 		Email:     "user@example.com",
 		Options: map[string]string{
 			"endpoint":          "https://s3.example.com",
@@ -128,10 +129,10 @@ func TestCreateS3Account_SecretSplitting(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateS3Account() error = %v", err)
+		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	if view.ID != "acc-test" || view.Email != "user@example.com" {
-		t.Fatalf("CreateS3Account() view mismatch = %+v", view)
+	if view.ID != "acc-test" || view.Email != "user@example.com" || view.Provider != string(connectors.ProviderS3) {
+		t.Fatalf("CreateAccount() view mismatch = %+v", view)
 	}
 
 	accounts, err := storage.NewSQLiteAccountRepository(db).List(context.Background())
@@ -162,6 +163,26 @@ func TestCreateS3Account_SecretSplitting(t *testing.T) {
 	}
 	if string(sak) != "SekRet456" {
 		t.Fatalf("Load(secret_access_key) = %q, want SekRet456", string(sak))
+	}
+}
+
+func TestProviderCapabilities_ReturnsS3Metadata(t *testing.T) {
+	t.Parallel()
+
+	a := newTestApp(openAppTestDB(t), newStubSecretStore(), &stubMountManager{})
+	capabilities := a.ProviderCapabilities()
+	if len(capabilities) != 1 {
+		t.Fatalf("ProviderCapabilities() len = %d, want 1", len(capabilities))
+	}
+	capability := capabilities[0]
+	if capability.Provider != string(connectors.ProviderS3) || capability.Label == "" {
+		t.Fatalf("ProviderCapabilities() capability mismatch = %+v", capability)
+	}
+	if len(capability.Fields) != 5 {
+		t.Fatalf("ProviderCapabilities() field count = %d, want 5", len(capability.Fields))
+	}
+	if !capability.Fields[3].Secret || !capability.Fields[4].Secret {
+		t.Fatalf("ProviderCapabilities() secret field metadata missing = %+v", capability.Fields)
 	}
 }
 
@@ -571,8 +592,9 @@ func TestLifecycle_AddMountUnmountRetry(t *testing.T) {
 	a := newTestApp(db, stub, successMgr)
 
 	// Add account.
-	_, err := a.CreateS3Account(CreateS3AccountRequest{
+	_, err := a.CreateAccount(CreateAccountRequest{
 		AccountID: "acc-lifecycle",
+		Provider:  string(connectors.ProviderS3),
 		Email:     "u@example.com",
 		Options: map[string]string{
 			"endpoint":          "https://s3.example.com",
@@ -582,7 +604,7 @@ func TestLifecycle_AddMountUnmountRetry(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateS3Account error = %v", err)
+		t.Fatalf("CreateAccount error = %v", err)
 	}
 
 	// Mount.

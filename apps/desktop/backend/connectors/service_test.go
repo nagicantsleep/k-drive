@@ -37,6 +37,18 @@ func TestValidateAccountID(t *testing.T) {
 	}
 }
 
+func TestSecretKeys_ReturnsOnlySecretFields(t *testing.T) {
+	t.Parallel()
+
+	keys := SecretKeys(NewS3Connector().Capability())
+	if len(keys) != 2 {
+		t.Fatalf("SecretKeys() len = %d, want 2", len(keys))
+	}
+	if keys[0] != "access_key_id" || keys[1] != "secret_access_key" {
+		t.Fatalf("SecretKeys() = %v", keys)
+	}
+}
+
 func TestS3Connector_BuildRemoteConfig_ValidationError(t *testing.T) {
 	t.Parallel()
 

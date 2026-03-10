@@ -14,10 +14,25 @@ import (
 
 const maxMountRetries = 3
 
-type CreateS3AccountRequest struct {
+type CreateAccountRequest struct {
 	AccountID string            `json:"accountId"`
+	Provider  string            `json:"provider"`
 	Email     string            `json:"email"`
 	Options   map[string]string `json:"options"`
+}
+
+type CapabilityFieldView struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Placeholder string `json:"placeholder"`
+	Required    bool   `json:"required"`
+	Secret      bool   `json:"secret"`
+}
+
+type ProviderCapabilityView struct {
+	Provider string                `json:"provider"`
+	Label    string                `json:"label"`
+	Fields   []CapabilityFieldView `json:"fields"`
 }
 
 type AccountView struct {
@@ -169,10 +184,11 @@ func (a *App) shutdown(_ context.Context) {
 	_ = a.db.Close()
 }
 
-func (a *App) CreateS3Account(request CreateS3AccountRequest) (AccountView, error) {
-	connector, ok := a.connectorRegistry.Get(connectors.ProviderS3)
+func (a *App) CreateAccount(request CreateAccountRequest) (AccountView, error) {
+	provider := connectors.Provider(request.Provider)
+	connector, ok := a.connectorRegistry.Get(provider)
 	if !ok {
-		return AccountView{}, fmt.Errorf("s3 connector is not registered")
+		return AccountView{}, fmt.Errorf("provider %q is not registered", request.Provider)
 	}
 
 	if err := connectors.ValidateAccountID(request.AccountID); err != nil {
@@ -181,24 +197,23 @@ func (a *App) CreateS3Account(request CreateS3AccountRequest) (AccountView, erro
 
 	_, err := connector.BuildRemoteConfig(a.ctx, connectors.AccountConfig{
 		AccountID: request.AccountID,
-		Provider:  connectors.ProviderS3,
+		Provider:  provider,
 		Options:   request.Options,
 	})
 	if err != nil {
-		return AccountView{}, fmt.Errorf("invalid s3 config: %w", err)
+		return AccountView{}, fmt.Errorf("invalid %s config: %w", request.Provider, err)
 	}
 
-	secretKeys := []string{"access_key_id", "secret_access_key"}
 	safeOptions := make(map[string]string, len(request.Options))
 	for k, v := range request.Options {
 		safeOptions[k] = v
 	}
-	for _, secretKey := range secretKeys {
+	for _, secretKey := range connectors.SecretKeys(connector.Capability()) {
 		val := safeOptions[secretKey]
 		if val == "" {
 			continue
 		}
-		storeKey := fmt.Sprintf("account/%s/%s", request.AccountID, secretKey)
+		storeKey := secretStoreKey(request.AccountID, secretKey)
 		if err := a.secretStore.Save(a.ctx, storeKey, []byte(val)); err != nil {
 			return AccountView{}, fmt.Errorf("save secret %s: %w", secretKey, err)
 		}
@@ -207,7 +222,7 @@ func (a *App) CreateS3Account(request CreateS3AccountRequest) (AccountView, erro
 
 	account := storage.Account{
 		ID:       request.AccountID,
-		Provider: string(connectors.ProviderS3),
+		Provider: request.Provider,
 		Email:    request.Email,
 		Options:  safeOptions,
 	}
@@ -221,6 +236,47 @@ func (a *App) CreateS3Account(request CreateS3AccountRequest) (AccountView, erro
 		Provider: account.Provider,
 		Email:    account.Email,
 	}, nil
+}
+
+func (a *App) ProviderCapabilities() []ProviderCapabilityView {
+	connectorList := a.connectorRegistry.List()
+	capabilities := make([]ProviderCapabilityView, 0, len(connectorList))
+	for _, connector := range connectorList {
+		capability := connector.Capability()
+		fields := make([]CapabilityFieldView, 0, len(capability.Fields))
+		for _, field := range capability.Fields {
+			fields = append(fields, CapabilityFieldView{
+				Key:         field.Key,
+				Label:       field.Label,
+				Placeholder: field.Placeholder,
+				Required:    field.Required,
+				Secret:      field.Secret,
+			})
+		}
+		capabilities = append(capabilities, ProviderCapabilityView{
+			Provider: string(capability.Provider),
+			Label:    capability.Label,
+			Fields:   fields,
+		})
+	}
+	return capabilities
+}
+
+func secretStoreKey(accountID, fieldKey string) string {
+	return fmt.Sprintf("account/%s/%s", accountID, fieldKey)
+}
+
+func (a *App) accountByID(accountID string) (*storage.Account, error) {
+	accounts, err := a.accountRepository.List(a.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load accounts: %w", err)
+	}
+	for i := range accounts {
+		if accounts[i].ID == accountID {
+			return &accounts[i], nil
+		}
+	}
+	return nil, fmt.Errorf("account %q not found", accountID)
 }
 
 func (a *App) ListAccounts() ([]AccountView, error) {
@@ -261,27 +317,22 @@ func (a *App) MountAccount(accountID string) error {
 
 // doMount is the shared implementation used by MountAccount, startup recovery, and retry goroutines.
 func (a *App) doMount(accountID string) error {
-	accounts, err := a.accountRepository.List(a.ctx)
+	account, err := a.accountByID(accountID)
 	if err != nil {
-		return fmt.Errorf("load accounts: %w", err)
+		return err
 	}
-	var account *storage.Account
-	for i := range accounts {
-		if accounts[i].ID == accountID {
-			account = &accounts[i]
-			break
-		}
-	}
-	if account == nil {
-		return fmt.Errorf("account %q not found", accountID)
+
+	connector, ok := a.connectorRegistry.Get(connectors.Provider(account.Provider))
+	if !ok {
+		return fmt.Errorf("provider %q is not registered", account.Provider)
 	}
 
 	opts := make(map[string]string, len(account.Options))
 	for k, v := range account.Options {
 		opts[k] = v
 	}
-	for _, secretKey := range []string{"access_key_id", "secret_access_key"} {
-		storeKey := fmt.Sprintf("account/%s/%s", accountID, secretKey)
+	for _, secretKey := range connectors.SecretKeys(connector.Capability()) {
+		storeKey := secretStoreKey(accountID, secretKey)
 		val, err := a.secretStore.Load(a.ctx, storeKey)
 		if err != nil && err != storage.ErrSecretNotFound {
 			return fmt.Errorf("load secret %s: %w", secretKey, err)
@@ -291,10 +342,9 @@ func (a *App) doMount(accountID string) error {
 		}
 	}
 
-	connector, _ := a.connectorRegistry.Get(connectors.ProviderS3)
 	remoteConfig, err := connector.BuildRemoteConfig(a.ctx, connectors.AccountConfig{
 		AccountID: accountID,
-		Provider:  connectors.ProviderS3,
+		Provider:  connectors.Provider(account.Provider),
 		Options:   opts,
 	})
 	if err != nil {
@@ -319,6 +369,11 @@ func (a *App) UnmountAccount(accountID string) error {
 		return err
 	}
 
+	account, err := a.accountByID(accountID)
+	if err != nil {
+		return err
+	}
+
 	a.retryMu.Lock()
 	a.stoppedByUser[accountID] = true
 	a.retryCounts[accountID] = 0
@@ -328,8 +383,10 @@ func (a *App) UnmountAccount(accountID string) error {
 		return err
 	}
 
-	remoteName := fmt.Sprintf("s3-%s", accountID)
-	_ = a.mountManager.DeleteConfig(remoteName)
+	connector, ok := a.connectorRegistry.Get(connectors.Provider(account.Provider))
+	if ok {
+		_ = a.mountManager.DeleteConfig(connector.RemoteName(accountID))
+	}
 
 	return nil
 }

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 
 type Account = {
@@ -14,6 +14,20 @@ type MountStatus = {
   errorCategory: string;
 };
 
+type CapabilityField = {
+  key: string;
+  label: string;
+  placeholder: string;
+  required: boolean;
+  secret: boolean;
+};
+
+type ProviderCapability = {
+  provider: string;
+  label: string;
+  fields: CapabilityField[];
+};
+
 const CATEGORY_LABELS: Record<string, string> = {
   dependency_missing: 'Dependency missing',
   path_error: 'Path error',
@@ -25,12 +39,10 @@ const go = (window as any).go.main.App;
 
 function App() {
   const [accountId, setAccountId] = useState('');
+  const [provider, setProvider] = useState('');
   const [email, setEmail] = useState('');
-  const [endpoint, setEndpoint] = useState('');
-  const [region, setRegion] = useState('');
-  const [bucket, setBucket] = useState('');
-  const [accessKeyId, setAccessKeyId] = useState('');
-  const [secretAccessKey, setSecretAccessKey] = useState('');
+  const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([]);
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [statuses, setStatuses] = useState<Record<string, MountStatus>>({});
@@ -45,6 +57,11 @@ function App() {
 
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
+
+  const selectedCapability = useMemo(
+    () => providerCapabilities.find((capability) => capability.provider === provider) ?? null,
+    [provider, providerCapabilities],
+  );
 
   async function refreshStatuses(accountList: Account[]) {
     const next: Record<string, MountStatus> = {};
@@ -67,9 +84,33 @@ function App() {
     return nextAccounts;
   }
 
+  async function refreshCapabilities() {
+    const nextCapabilities = (await go.ProviderCapabilities()) as ProviderCapability[];
+    setProviderCapabilities(nextCapabilities);
+    if (!provider && nextCapabilities.length > 0) {
+      setProvider(nextCapabilities[0].provider);
+    }
+    return nextCapabilities;
+  }
+
   useEffect(() => {
-    void refreshAccounts().finally(() => setLoading(false));
+    void Promise.all([refreshCapabilities(), refreshAccounts()]).finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!selectedCapability) {
+      setFormValues({});
+      return;
+    }
+
+    setFormValues((current) => {
+      const next: Record<string, string> = {};
+      for (const field of selectedCapability.fields) {
+        next[field.key] = current[field.key] ?? '';
+      }
+      return next;
+    });
+  }, [selectedCapability]);
 
   // Poll status while any account is in 'mounting' state.
   useEffect(() => {
@@ -87,29 +128,25 @@ function App() {
 
   async function onCreateAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!selectedCapability) {
+      setError('No provider is available.');
+      return;
+    }
+
     setError('');
     setMessage('');
     setFormPending(true);
     try {
-      await go.CreateS3Account({
+      await go.CreateAccount({
         accountId,
+        provider,
         email,
-        options: {
-          endpoint,
-          region,
-          bucket,
-          access_key_id: accessKeyId,
-          secret_access_key: secretAccessKey,
-        },
+        options: formValues,
       });
-      setMessage('S3 account created.');
+      setMessage(`${selectedCapability.label} account created.`);
       setAccountId('');
       setEmail('');
-      setEndpoint('');
-      setRegion('');
-      setBucket('');
-      setAccessKeyId('');
-      setSecretAccessKey('');
+      setFormValues(Object.fromEntries(selectedCapability.fields.map((field) => [field.key, ''])));
       await refreshAccounts();
     } catch (e: any) {
       setError(String(e));
@@ -127,7 +164,6 @@ function App() {
       setStatuses((prev) => ({ ...prev, [id]: status }));
     } catch (e: any) {
       setError(String(e));
-      // Refresh so the error state is visible in the row too.
       const status = (await go.AccountMountStatus(id).catch(() => null)) as MountStatus | null;
       if (status) setStatuses((prev) => ({ ...prev, [id]: status }));
     } finally {
@@ -166,14 +202,31 @@ function App() {
     <div className="app">
       <h1>K-Drive</h1>
       <form className="account-form" onSubmit={onCreateAccount}>
+        <select value={provider} onChange={(e) => setProvider(e.target.value)} required disabled={formPending || providerCapabilities.length === 0}>
+          {providerCapabilities.map((capability) => (
+            <option key={capability.provider} value={capability.provider}>
+              {capability.label}
+            </option>
+          ))}
+        </select>
         <input value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder="Account ID (letters, digits, - _)" required disabled={formPending} />
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required disabled={formPending} />
-        <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="S3 endpoint URL" required disabled={formPending} />
-        <input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Region" required disabled={formPending} />
-        <input value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="Bucket (optional)" disabled={formPending} />
-        <input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder="Access Key ID" required disabled={formPending} />
-        <input value={secretAccessKey} onChange={(e) => setSecretAccessKey(e.target.value)} placeholder="Secret Access Key" type="password" required disabled={formPending} />
-        <button type="submit" disabled={formPending}>{formPending ? 'Adding…' : 'Add S3 Account'}</button>
+        {selectedCapability?.fields.map((field) => (
+          <label key={field.key} className="account-form__field">
+            <span>{field.label}</span>
+            <input
+              value={formValues[field.key] ?? ''}
+              onChange={(e) => setFormValues((current) => ({ ...current, [field.key]: e.target.value }))}
+              placeholder={field.placeholder}
+              required={field.required}
+              type={field.secret ? 'password' : 'text'}
+              disabled={formPending}
+            />
+          </label>
+        ))}
+        <button type="submit" disabled={formPending || !selectedCapability}>
+          {formPending ? 'Adding…' : `Add ${selectedCapability?.label ?? 'Account'}`}
+        </button>
       </form>
 
       {message && <p className="message">{message}</p>}

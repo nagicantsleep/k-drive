@@ -27,14 +27,28 @@
   cursor: not-allowed;
 }
 
-.account-form input {
+.account-form input,
+.account-form select {
   padding: 0.55rem 0.7rem;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
 }
 
-.account-form input:disabled {
+.account-form input:disabled,
+.account-form select:disabled {
   background: #f1f5f9;
+}
+
+.account-form__field {
+  display: grid;
+  gap: 0.35rem;
+  text-align: left;
+  font-size: 0.9rem;
+  color: #334155;
+}
+
+.account-form__field span {
+  font-weight: 600;
 }
 
 .message {
