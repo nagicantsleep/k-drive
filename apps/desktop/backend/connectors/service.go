@@ -50,9 +50,10 @@ type CapabilityField struct {
 }
 
 type ProviderCapability struct {
-	Provider Provider
-	Label    string
-	Fields   []CapabilityField
+	Provider   Provider
+	Label      string
+	AuthScheme string
+	Fields     []CapabilityField
 }
 
 type Connector interface {
@@ -122,8 +123,9 @@ func (c *S3Connector) Provider() Provider {
 
 func (c *S3Connector) Capability() ProviderCapability {
 	return ProviderCapability{
-		Provider: ProviderS3,
-		Label:    "S3-Compatible",
+		Provider:   ProviderS3,
+		Label:      "S3-Compatible",
+		AuthScheme: "static",
 		Fields: []CapabilityField{
 			{Key: "endpoint", Label: "Endpoint URL", Placeholder: "S3 endpoint URL", Required: true},
 			{Key: "region", Label: "Region", Placeholder: "Region", Required: true},

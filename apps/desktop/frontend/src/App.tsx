@@ -25,6 +25,7 @@ type CapabilityField = {
 type ProviderCapability = {
   provider: string;
   label: string;
+  authScheme: string;
   fields: CapabilityField[];
 };
 
@@ -41,6 +42,7 @@ function App() {
   const [accountId, setAccountId] = useState('');
   const [provider, setProvider] = useState('');
   const [email, setEmail] = useState('');
+  const [oauthClientId, setOauthClientId] = useState('');
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([]);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
 
@@ -137,15 +139,30 @@ function App() {
     setMessage('');
     setFormPending(true);
     try {
-      await go.CreateAccount({
-        accountId,
-        provider,
-        email,
-        options: formValues,
-      });
-      setMessage(`${selectedCapability.label} account created.`);
+      if (selectedCapability.authScheme === 'oauth') {
+        await go.BeginOAuth({
+          provider,
+          accountId,
+          clientId: oauthClientId,
+        });
+        await go.CreateOAuthAccount({
+          accountId,
+          provider,
+          email,
+        });
+        setMessage(`${selectedCapability.label} account connected.`);
+      } else {
+        await go.CreateAccount({
+          accountId,
+          provider,
+          email,
+          options: formValues,
+        });
+        setMessage(`${selectedCapability.label} account created.`);
+      }
       setAccountId('');
       setEmail('');
+      setOauthClientId('');
       setFormValues(Object.fromEntries(selectedCapability.fields.map((field) => [field.key, ''])));
       await refreshAccounts();
     } catch (e: any) {
@@ -211,21 +228,29 @@ function App() {
         </select>
         <input value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder="Account ID (letters, digits, - _)" required disabled={formPending} />
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required disabled={formPending} />
-        {selectedCapability?.fields.map((field) => (
-          <label key={field.key} className="account-form__field">
-            <span>{field.label}</span>
-            <input
-              value={formValues[field.key] ?? ''}
-              onChange={(e) => setFormValues((current) => ({ ...current, [field.key]: e.target.value }))}
-              placeholder={field.placeholder}
-              required={field.required}
-              type={field.secret ? 'password' : 'text'}
-              disabled={formPending}
-            />
-          </label>
-        ))}
+        {selectedCapability?.authScheme === 'oauth' ? (
+          <input value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} placeholder="OAuth Client ID" required disabled={formPending} />
+        ) : (
+          selectedCapability?.fields.map((field) => (
+            <label key={field.key} className="account-form__field">
+              <span>{field.label}</span>
+              <input
+                value={formValues[field.key] ?? ''}
+                onChange={(e) => setFormValues((current) => ({ ...current, [field.key]: e.target.value }))}
+                placeholder={field.placeholder}
+                required={field.required}
+                type={field.secret ? 'password' : 'text'}
+                disabled={formPending}
+              />
+            </label>
+          ))
+        )}
         <button type="submit" disabled={formPending || !selectedCapability}>
-          {formPending ? 'Adding…' : `Add ${selectedCapability?.label ?? 'Account'}`}
+          {formPending
+            ? selectedCapability?.authScheme === 'oauth' ? 'Connecting…' : 'Adding…'
+            : selectedCapability?.authScheme === 'oauth'
+              ? `Connect ${selectedCapability?.label ?? 'Account'}`
+              : `Add ${selectedCapability?.label ?? 'Account'}`}
         </button>
       </form>
 

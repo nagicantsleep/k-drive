@@ -31,9 +31,10 @@ type CapabilityFieldView struct {
 }
 
 type ProviderCapabilityView struct {
-	Provider string                `json:"provider"`
-	Label    string                `json:"label"`
-	Fields   []CapabilityFieldView `json:"fields"`
+	Provider   string                `json:"provider"`
+	Label      string                `json:"label"`
+	AuthScheme string                `json:"authScheme"`
+	Fields     []CapabilityFieldView `json:"fields"`
 }
 
 type BeginOAuthRequest struct {
@@ -250,6 +251,34 @@ func resolveOAuthProvider(provider string) (auth.OAuthProvider, string, string, 
 	}
 }
 
+type CreateOAuthAccountRequest struct {
+	AccountID string `json:"accountId"`
+	Provider  string `json:"provider"`
+	Email     string `json:"email"`
+}
+
+// CreateOAuthAccount persists an account row for an OAuth provider whose tokens
+// have already been stored by BeginOAuth. No credential options are needed here.
+func (a *App) CreateOAuthAccount(request CreateOAuthAccountRequest) (AccountView, error) {
+	if err := connectors.ValidateAccountID(request.AccountID); err != nil {
+		return AccountView{}, err
+	}
+	if _, ok := a.connectorRegistry.Get(connectors.Provider(request.Provider)); !ok {
+		return AccountView{}, fmt.Errorf("provider %q is not registered", request.Provider)
+	}
+
+	account := storage.Account{
+		ID:       request.AccountID,
+		Provider: request.Provider,
+		Email:    request.Email,
+		Options:  map[string]string{},
+	}
+	if err := a.accountRepository.Save(a.ctx, account); err != nil {
+		return AccountView{}, err
+	}
+	return AccountView{ID: account.ID, Provider: account.Provider, Email: account.Email}, nil
+}
+
 func (a *App) CreateAccount(request CreateAccountRequest) (AccountView, error) {
 	provider := connectors.Provider(request.Provider)
 	connector, ok := a.connectorRegistry.Get(provider)
@@ -320,9 +349,10 @@ func (a *App) ProviderCapabilities() []ProviderCapabilityView {
 			})
 		}
 		capabilities = append(capabilities, ProviderCapabilityView{
-			Provider: string(capability.Provider),
-			Label:    capability.Label,
-			Fields:   fields,
+			Provider:   string(capability.Provider),
+			Label:      capability.Label,
+			AuthScheme: capability.AuthScheme,
+			Fields:     fields,
 		})
 	}
 	return capabilities
