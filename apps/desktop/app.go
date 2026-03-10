@@ -1,6 +1,7 @@
 package main
 
 import (
+	"KDrive/backend/auth"
 	"KDrive/backend/connectors"
 	"KDrive/backend/mount"
 	"KDrive/backend/storage"
@@ -35,6 +36,18 @@ type ProviderCapabilityView struct {
 	Fields   []CapabilityFieldView `json:"fields"`
 }
 
+type BeginOAuthRequest struct {
+	Provider  string `json:"provider"`
+	AccountID string `json:"accountId"`
+	ClientID  string `json:"clientId"`
+}
+
+type BeginOAuthResultView struct {
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	Expiry       string `json:"expiry"`
+}
+
 type AccountView struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
@@ -57,6 +70,7 @@ type App struct {
 	accountRepository    storage.AccountRepository
 	mountStateRepository storage.MountStateRepository
 	secretStore          storage.SecretStore
+	authService          auth.Service
 
 	retryMu        sync.Mutex
 	retryCounts    map[string]int
@@ -75,13 +89,15 @@ func NewApp() *App {
 	registry.Register(connectors.NewS3Connector())
 
 	mountStateRepo := storage.NewSQLiteMountStateRepository(db)
+	secretStore := storage.NewSQLiteSecretStore(db)
 
 	a := &App{
 		db:                   db,
 		connectorRegistry:    registry,
 		accountRepository:    storage.NewSQLiteAccountRepository(db),
 		mountStateRepository: mountStateRepo,
-		secretStore:          storage.NewSQLiteSecretStore(db),
+		secretStore:          secretStore,
+		authService:          auth.NewService(auth.NewSecretBackedTokenStore(secretStore)),
 		retryCounts:          make(map[string]int),
 		stoppedByUser:        make(map[string]bool),
 		retryBaseDelay:       5 * time.Second,
@@ -182,6 +198,56 @@ func (a *App) autoRemountOnStartup() {
 
 func (a *App) shutdown(_ context.Context) {
 	_ = a.db.Close()
+}
+
+// BeginOAuth opens the system browser for an OAuth 2.0 + PKCE flow, waits for
+// the local callback, and returns the resulting tokens. The caller (typically the
+// frontend) provides the provider key and a client_id registered for that provider.
+// Token endpoint URLs are resolved internally per provider.
+func (a *App) BeginOAuth(request BeginOAuthRequest) (BeginOAuthResultView, error) {
+	oauthProvider, tokenURL, authURL, scopes, err := resolveOAuthProvider(request.Provider)
+	if err != nil {
+		return BeginOAuthResultView{}, err
+	}
+
+	result, err := a.authService.BeginOAuth(a.ctx, auth.OAuthRequest{
+		Config: auth.OAuthConfig{
+			Provider: oauthProvider,
+			ClientID: request.ClientID,
+			AuthURL:  authURL,
+			TokenURL: tokenURL,
+			Scopes:   scopes,
+		},
+		AccountID: request.AccountID,
+	})
+	if err != nil {
+		return BeginOAuthResultView{}, err
+	}
+
+	return BeginOAuthResultView{
+		AccessToken:  result.Token.AccessToken,
+		RefreshToken: result.Token.RefreshToken,
+		Expiry:       result.Token.Expiry.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+func resolveOAuthProvider(provider string) (auth.OAuthProvider, string, string, []string, error) {
+	switch provider {
+	case string(auth.OAuthProviderGoogle):
+		return auth.OAuthProviderGoogle,
+			"https://oauth2.googleapis.com/token",
+			"https://accounts.google.com/o/oauth2/v2/auth",
+			[]string{"https://www.googleapis.com/auth/drive"},
+			nil
+	case string(auth.OAuthProviderMicrosoft):
+		return auth.OAuthProviderMicrosoft,
+			"https://login.microsoftonline.com/common/oauth2/v2.0/token",
+			"https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			[]string{"Files.ReadWrite.All", "offline_access"},
+			nil
+	default:
+		return "", "", "", nil, fmt.Errorf("OAuth provider %q is not supported", provider)
+	}
 }
 
 func (a *App) CreateAccount(request CreateAccountRequest) (AccountView, error) {
