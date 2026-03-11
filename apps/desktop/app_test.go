@@ -859,3 +859,28 @@ func TestMountAccount_GoogleIncludesOAuthTokenInRemoteConfig(t *testing.T) {
 		t.Fatalf("refresh_token = %q, want refresh-456", payload["refresh_token"])
 	}
 }
+
+func TestMountAccount_GoogleMissingOAuthTokenFailsAsConfigInvalid(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	db := openAppTestDB(t)
+	a := newTestApp(db, stub, &stubMountManager{})
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID:       "google-no-token",
+		Provider: string(connectors.ProviderGoogle),
+		Email:    "google.user@example.com",
+		Options:  map[string]string{},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	err := a.MountAccount("google-no-token")
+	if err == nil {
+		t.Fatal("MountAccount() expected error, got nil")
+	}
+	if errorCategoryFromErr(err) != "config_invalid" {
+		t.Fatalf("error category = %q, want config_invalid", errorCategoryFromErr(err))
+	}
+}
