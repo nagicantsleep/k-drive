@@ -47,6 +47,11 @@ func TestSecretKeys_ReturnsOnlySecretFields(t *testing.T) {
 	if keys[0] != "access_key_id" || keys[1] != "secret_access_key" {
 		t.Fatalf("SecretKeys() = %v", keys)
 	}
+
+	googleKeys := SecretKeys(NewGoogleDriveConnector().Capability())
+	if len(googleKeys) != 0 {
+		t.Fatalf("SecretKeys(google) = %v, want empty", googleKeys)
+	}
 }
 
 func TestS3Connector_BuildRemoteConfig_ValidationError(t *testing.T) {
@@ -102,5 +107,57 @@ func TestS3Connector_BuildRemoteConfig_Success(t *testing.T) {
 		config.Options["env_auth"] != "false" ||
 		config.Options["bucket"] != "team-bucket" {
 		t.Fatalf("BuildRemoteConfig() options mismatch = %+v", config.Options)
+	}
+}
+
+func TestGoogleDriveConnector_Capability(t *testing.T) {
+	t.Parallel()
+
+	capability := NewGoogleDriveConnector().Capability()
+	if capability.Provider != ProviderGoogle {
+		t.Fatalf("Provider = %q, want %q", capability.Provider, ProviderGoogle)
+	}
+	if capability.AuthScheme != "oauth" {
+		t.Fatalf("AuthScheme = %q, want oauth", capability.AuthScheme)
+	}
+	if len(capability.Fields) != 2 {
+		t.Fatalf("Fields len = %d, want 2", len(capability.Fields))
+	}
+}
+
+func TestGoogleDriveConnector_BuildRemoteConfig_Success(t *testing.T) {
+	t.Parallel()
+
+	connector := NewGoogleDriveConnector()
+	config, err := connector.BuildRemoteConfig(context.Background(), AccountConfig{
+		AccountID: "google-1",
+		Provider:  ProviderGoogle,
+		Options: map[string]string{
+			"root_folder_id": "root123",
+			"shared_drive":   "drive123",
+			"token":          "token-json",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildRemoteConfig() error = %v", err)
+	}
+
+	if config.Name != "gdrive-google-1" {
+		t.Fatalf("Name = %q, want gdrive-google-1", config.Name)
+	}
+	if config.Type != "drive" {
+		t.Fatalf("Type = %q, want drive", config.Type)
+	}
+	if config.Options["scope"] != "drive" {
+		t.Fatalf("scope = %q, want drive", config.Options["scope"])
+	}
+	if config.Options["root_folder_id"] != "root123" {
+		t.Fatalf("root_folder_id = %q, want root123", config.Options["root_folder_id"])
+	}
+	if config.Options["team_drive"] != "drive123" {
+		t.Fatalf("team_drive = %q, want drive123", config.Options["team_drive"])
+	}
+	if config.Options["token"] != "token-json" {
+		t.Fatalf("token = %q, want token-json", config.Options["token"])
 	}
 }

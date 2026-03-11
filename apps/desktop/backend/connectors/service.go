@@ -182,6 +182,58 @@ func (c *S3Connector) BuildRemoteConfig(_ context.Context, account AccountConfig
 	}, nil
 }
 
+type GoogleDriveConnector struct{}
+
+func NewGoogleDriveConnector() *GoogleDriveConnector {
+	return &GoogleDriveConnector{}
+}
+
+func (c *GoogleDriveConnector) Provider() Provider {
+	return ProviderGoogle
+}
+
+func (c *GoogleDriveConnector) Capability() ProviderCapability {
+	return ProviderCapability{
+		Provider:   ProviderGoogle,
+		Label:      "Google Drive",
+		AuthScheme: "oauth",
+		Fields: []CapabilityField{
+			{Key: "root_folder_id", Label: "Root Folder ID", Placeholder: "Root folder ID (optional)"},
+			{Key: "shared_drive", Label: "Shared Drive ID", Placeholder: "Shared drive ID (optional)"},
+		},
+	}
+}
+
+func (c *GoogleDriveConnector) RemoteName(accountID string) string {
+	return fmt.Sprintf("gdrive-%s", accountID)
+}
+
+func (c *GoogleDriveConnector) BuildRemoteConfig(_ context.Context, account AccountConfig) (RemoteConfig, error) {
+	if strings.TrimSpace(account.AccountID) == "" {
+		return RemoteConfig{}, fmt.Errorf("account ID is required")
+	}
+
+	normalized := map[string]string{
+		"scope": "drive",
+	}
+
+	if rootFolderID := strings.TrimSpace(account.Options["root_folder_id"]); rootFolderID != "" {
+		normalized["root_folder_id"] = rootFolderID
+	}
+	if sharedDriveID := strings.TrimSpace(account.Options["shared_drive"]); sharedDriveID != "" {
+		normalized["team_drive"] = sharedDriveID
+	}
+	if token := strings.TrimSpace(account.Options["token"]); token != "" {
+		normalized["token"] = token
+	}
+
+	return RemoteConfig{
+		Name:    c.RemoteName(account.AccountID),
+		Type:    "drive",
+		Options: normalized,
+	}, nil
+}
+
 func requiredOption(options map[string]string, key string) (string, error) {
 	value := strings.TrimSpace(options[key])
 	if value == "" {

@@ -94,6 +94,7 @@ func openAppTestDB(t *testing.T) *sql.DB {
 func newTestApp(db *sql.DB, secretStore storage.SecretStore, mountMgr mount.Manager) *App {
 	registry := connectors.NewRegistry()
 	registry.Register(connectors.NewS3Connector())
+	registry.Register(connectors.NewGoogleDriveConnector())
 
 	a := &App{
 		db:                   db,
@@ -166,23 +167,30 @@ func TestCreateAccount_SecretSplitting(t *testing.T) {
 	}
 }
 
-func TestProviderCapabilities_ReturnsS3Metadata(t *testing.T) {
+func TestProviderCapabilities_ReturnsConnectorMetadata(t *testing.T) {
 	t.Parallel()
 
 	a := newTestApp(openAppTestDB(t), newStubSecretStore(), &stubMountManager{})
 	capabilities := a.ProviderCapabilities()
-	if len(capabilities) != 1 {
-		t.Fatalf("ProviderCapabilities() len = %d, want 1", len(capabilities))
+	if len(capabilities) != 2 {
+		t.Fatalf("ProviderCapabilities() len = %d, want 2", len(capabilities))
 	}
-	capability := capabilities[0]
-	if capability.Provider != string(connectors.ProviderS3) || capability.Label == "" {
-		t.Fatalf("ProviderCapabilities() capability mismatch = %+v", capability)
+
+	if capabilities[0].Provider != string(connectors.ProviderGoogle) {
+		t.Fatalf("first provider = %q, want %q", capabilities[0].Provider, connectors.ProviderGoogle)
 	}
-	if len(capability.Fields) != 5 {
-		t.Fatalf("ProviderCapabilities() field count = %d, want 5", len(capability.Fields))
+	if capabilities[0].AuthScheme != "oauth" {
+		t.Fatalf("google authScheme = %q, want oauth", capabilities[0].AuthScheme)
 	}
-	if !capability.Fields[3].Secret || !capability.Fields[4].Secret {
-		t.Fatalf("ProviderCapabilities() secret field metadata missing = %+v", capability.Fields)
+
+	if capabilities[1].Provider != string(connectors.ProviderS3) {
+		t.Fatalf("second provider = %q, want %q", capabilities[1].Provider, connectors.ProviderS3)
+	}
+	if len(capabilities[1].Fields) != 5 {
+		t.Fatalf("s3 field count = %d, want 5", len(capabilities[1].Fields))
+	}
+	if !capabilities[1].Fields[3].Secret || !capabilities[1].Fields[4].Secret {
+		t.Fatalf("s3 secret field metadata missing = %+v", capabilities[1].Fields)
 	}
 }
 
