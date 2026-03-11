@@ -743,3 +743,59 @@ func TestOnMountStateChange_NonProcessFailureDoesNotRetry(t *testing.T) {
 		t.Fatalf("unexpected retry for dependency failure; mountedIDs = %v", mgr.mountedIDs)
 	}
 }
+
+func TestResolveOAuthProvider_AcceptsConnectorProviderKeys(t *testing.T) {
+	t.Parallel()
+
+	provider, tokenURL, authURL, scopes, err := resolveOAuthProvider(string(connectors.ProviderGoogle))
+	if err != nil {
+		t.Fatalf("resolveOAuthProvider(google-drive) error = %v", err)
+	}
+	if provider != "google" {
+		t.Fatalf("provider = %q, want google", provider)
+	}
+	if tokenURL == "" || authURL == "" || len(scopes) == 0 {
+		t.Fatalf("oauth config is incomplete")
+	}
+
+	provider, tokenURL, authURL, scopes, err = resolveOAuthProvider(string(connectors.ProviderOneDrive))
+	if err != nil {
+		t.Fatalf("resolveOAuthProvider(onedrive) error = %v", err)
+	}
+	if provider != "microsoft" {
+		t.Fatalf("provider = %q, want microsoft", provider)
+	}
+	if tokenURL == "" || authURL == "" || len(scopes) == 0 {
+		t.Fatalf("oauth config is incomplete")
+	}
+}
+
+func TestCreateOAuthAccount_GoogleProviderSaved(t *testing.T) {
+	t.Parallel()
+
+	db := openAppTestDB(t)
+	a := newTestApp(db, newStubSecretStore(), &stubMountManager{})
+
+	view, err := a.CreateOAuthAccount(CreateOAuthAccountRequest{
+		AccountID: "google-account-1",
+		Provider:  string(connectors.ProviderGoogle),
+		Email:     "google.user@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateOAuthAccount() error = %v", err)
+	}
+	if view.Provider != string(connectors.ProviderGoogle) {
+		t.Fatalf("CreateOAuthAccount() provider = %q, want %q", view.Provider, connectors.ProviderGoogle)
+	}
+
+	accounts, err := a.accountRepository.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("List() len = %d, want 1", len(accounts))
+	}
+	if accounts[0].ID != "google-account-1" || accounts[0].Provider != string(connectors.ProviderGoogle) {
+		t.Fatalf("saved account mismatch = %+v", accounts[0])
+	}
+}

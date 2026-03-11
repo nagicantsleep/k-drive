@@ -235,13 +235,13 @@ func (a *App) BeginOAuth(request BeginOAuthRequest) (BeginOAuthResultView, error
 
 func resolveOAuthProvider(provider string) (auth.OAuthProvider, string, string, []string, error) {
 	switch provider {
-	case string(auth.OAuthProviderGoogle):
+	case string(auth.OAuthProviderGoogle), string(connectors.ProviderGoogle):
 		return auth.OAuthProviderGoogle,
 			"https://oauth2.googleapis.com/token",
 			"https://accounts.google.com/o/oauth2/v2/auth",
 			[]string{"https://www.googleapis.com/auth/drive"},
 			nil
-	case string(auth.OAuthProviderMicrosoft):
+	case string(auth.OAuthProviderMicrosoft), string(connectors.ProviderOneDrive):
 		return auth.OAuthProviderMicrosoft,
 			"https://login.microsoftonline.com/common/oauth2/v2.0/token",
 			"https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
