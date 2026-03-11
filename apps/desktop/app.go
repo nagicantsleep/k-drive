@@ -7,6 +7,7 @@ import (
 	"KDrive/backend/storage"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -363,6 +364,21 @@ func secretStoreKey(accountID, fieldKey string) string {
 	return fmt.Sprintf("account/%s/%s", accountID, fieldKey)
 }
 
+func encodeRcloneTokenOption(token auth.OAuthToken) (string, error) {
+	payload := map[string]string{
+		"access_token":  token.AccessToken,
+		"refresh_token": token.RefreshToken,
+	}
+	if !token.Expiry.IsZero() {
+		payload["expiry"] = token.Expiry.UTC().Format(time.RFC3339)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func (a *App) accountByID(accountID string) (*storage.Account, error) {
 	accounts, err := a.accountRepository.List(a.ctx)
 	if err != nil {
@@ -437,6 +453,19 @@ func (a *App) doMount(accountID string) error {
 		if len(val) > 0 {
 			opts[secretKey] = string(val)
 		}
+	}
+
+	if connectors.Provider(account.Provider) == connectors.ProviderGoogle {
+		tokenStore := auth.NewSecretBackedTokenStore(a.secretStore)
+		token, err := tokenStore.Load(a.ctx, auth.OAuthProviderGoogle, accountID)
+		if err != nil {
+			return &configInvalidError{cause: fmt.Errorf("load google oauth token: %w", err)}
+		}
+		encodedToken, err := encodeRcloneTokenOption(token)
+		if err != nil {
+			return &configInvalidError{cause: fmt.Errorf("encode google oauth token: %w", err)}
+		}
+		opts["token"] = encodedToken
 	}
 
 	remoteConfig, err := connector.BuildRemoteConfig(a.ctx, connectors.AccountConfig{

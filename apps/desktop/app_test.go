@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"KDrive/backend/auth"
 	"KDrive/backend/connectors"
 	"KDrive/backend/mount"
 	"KDrive/backend/storage"
@@ -797,5 +799,63 @@ func TestCreateOAuthAccount_GoogleProviderSaved(t *testing.T) {
 	}
 	if accounts[0].ID != "google-account-1" || accounts[0].Provider != string(connectors.ProviderGoogle) {
 		t.Fatalf("saved account mismatch = %+v", accounts[0])
+	}
+}
+
+func TestMountAccount_GoogleIncludesOAuthTokenInRemoteConfig(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	db := openAppTestDB(t)
+	mgr := &stubMountManager{}
+	a := newTestApp(db, stub, mgr)
+
+	tokenStore := auth.NewSecretBackedTokenStore(stub)
+	err := tokenStore.Save(context.Background(), auth.OAuthProviderGoogle, "google-acc", auth.OAuthToken{
+		AccessToken:  "access-123",
+		RefreshToken: "refresh-456",
+		Expiry:       time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("tokenStore.Save() error = %v", err)
+	}
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID:       "google-acc",
+		Provider: string(connectors.ProviderGoogle),
+		Email:    "google.user@example.com",
+		Options:  map[string]string{},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if err := a.MountAccount("google-acc"); err != nil {
+		t.Fatalf("MountAccount() error = %v", err)
+	}
+	if len(mgr.writtenConfigs) != 1 {
+		t.Fatalf("WriteConfig called %d times, want 1", len(mgr.writtenConfigs))
+	}
+
+	remote := mgr.writtenConfigs[0]
+	if remote.Type != "drive" {
+		t.Fatalf("remote.Type = %q, want drive", remote.Type)
+	}
+	if remote.Name != "gdrive-google-acc" {
+		t.Fatalf("remote.Name = %q, want gdrive-google-acc", remote.Name)
+	}
+
+	tokenJSON := remote.Options["token"]
+	if tokenJSON == "" {
+		t.Fatal("remote token option is empty")
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(tokenJSON), &payload); err != nil {
+		t.Fatalf("token JSON invalid: %v", err)
+	}
+	if payload["access_token"] != "access-123" {
+		t.Fatalf("access_token = %q, want access-123", payload["access_token"])
+	}
+	if payload["refresh_token"] != "refresh-456" {
+		t.Fatalf("refresh_token = %q, want refresh-456", payload["refresh_token"])
 	}
 }
