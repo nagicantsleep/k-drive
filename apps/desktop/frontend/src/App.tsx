@@ -50,6 +50,13 @@ type ProviderCapability = {
   fields: CapabilityField[];
 };
 
+type DependencyStatus = {
+  name: string;
+  installed: boolean;
+  installUrl: string;
+  message: string;
+};
+
 const CATEGORY_LABELS: Record<string, string> = {
   dependency_missing: 'Dependency missing',
   path_error: 'Path error',
@@ -68,6 +75,8 @@ function App() {
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [mountPaths, setMountPaths] = useState<Record<string, string>>({});
   const [availableLetters, setAvailableLetters] = useState<string[]>([]);
+  const [setupDeps, setSetupDeps] = useState<DependencyStatus[] | null>(null);
+  const [setupChecking, setSetupChecking] = useState(false);
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [statuses, setStatuses] = useState<Record<string, MountStatus>>({});
@@ -165,8 +174,23 @@ function App() {
     return nextCapabilities;
   }
 
+  async function runPreflightCheck() {
+    setSetupChecking(true);
+    try {
+      const deps = (await go.PreflightCheck()) as DependencyStatus[];
+      const hasMissing = deps.some((d) => !d.installed);
+      setSetupDeps(hasMissing ? deps : null);
+    } catch {
+      setSetupDeps(null);
+    } finally {
+      setSetupChecking(false);
+    }
+  }
+
   useEffect(() => {
-    void Promise.all([refreshCapabilities(), refreshAccounts()]).finally(() => setLoading(false));
+    runPreflightCheck().then(() => {
+      void Promise.all([refreshCapabilities(), refreshAccounts()]).finally(() => setLoading(false));
+    });
     go.AvailableDriveLetters().then((letters: string[]) => setAvailableLetters(letters)).catch(() => {});
   }, []);
 
@@ -319,7 +343,42 @@ function App() {
     return (
       <div className="app">
         <h1>K-Drive</h1>
-        <p className="loading">Loading accounts…</p>
+        <p className="loading">Loading…</p>
+      </div>
+    );
+  }
+
+  if (setupDeps) {
+    return (
+      <div className="app">
+        <h1>K-Drive</h1>
+        <div className="setup-wizard">
+          <h2>Setup Required</h2>
+          <p>Some dependencies are missing. Please install them to continue.</p>
+          <ul className="setup-wizard__deps">
+            {setupDeps.map((dep) => (
+              <li key={dep.name} className={dep.installed ? 'setup-wizard__dep--ok' : 'setup-wizard__dep--missing'}>
+                <strong>{dep.name}</strong>
+                {dep.installed ? (
+                  <span className="setup-wizard__check"> ✓ Installed</span>
+                ) : (
+                  <>
+                    <span className="setup-wizard__x"> ✗ Not installed</span>
+                    {dep.message && <div className="setup-wizard__msg">{dep.message}</div>}
+                    {dep.installUrl && (
+                      <a href={dep.installUrl} target="_blank" rel="noopener noreferrer" className="setup-wizard__link">
+                        Download &rarr;
+                      </a>
+                    )}
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+          <button type="button" onClick={runPreflightCheck} disabled={setupChecking} className="setup-wizard__recheck">
+            {setupChecking ? 'Checking…' : 'Re-check'}
+          </button>
+        </div>
       </div>
     );
   }

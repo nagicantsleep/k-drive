@@ -261,6 +261,11 @@ func (a *App) AvailableDriveLetters() []string {
 	return letters
 }
 
+// PreflightCheck runs dependency checks proactively and returns structured results.
+func (a *App) PreflightCheck() []mount.DependencyStatus {
+	return mount.RunPreflightChecks("rclone", mount.DefaultMountBaseDir())
+}
+
 // BeginOAuth opens the system browser for an OAuth 2.0 + PKCE flow, waits for
 // the local callback, and returns the resulting tokens. The caller (typically the
 // frontend) provides the provider key and a client_id registered for that provider.

@@ -49,6 +49,53 @@ func runPreflight(rclonePath, mountBaseDir string) error {
 	return nil
 }
 
+// DependencyStatus describes the install state of a single dependency.
+type DependencyStatus struct {
+	Name       string `json:"name"`
+	Installed  bool   `json:"installed"`
+	InstallURL string `json:"installUrl"`
+	Message    string `json:"message"`
+}
+
+// RunPreflightChecks checks all dependencies individually and returns their status.
+func RunPreflightChecks(rclonePath, mountBaseDir string) []DependencyStatus {
+	results := make([]DependencyStatus, 0, 3)
+
+	rcloneStatus := DependencyStatus{
+		Name:       "rclone",
+		Installed:  true,
+		InstallURL: "https://rclone.org/install/",
+	}
+	if err := checkRclone(rclonePath); err != nil {
+		rcloneStatus.Installed = false
+		rcloneStatus.Message = err.Error()
+	}
+	results = append(results, rcloneStatus)
+
+	winfspStatus := DependencyStatus{
+		Name:       "WinFsp",
+		Installed:  true,
+		InstallURL: "https://winfsp.dev/rel/",
+	}
+	if err := checkWinFsp(); err != nil {
+		winfspStatus.Installed = false
+		winfspStatus.Message = err.Error()
+	}
+	results = append(results, winfspStatus)
+
+	dirStatus := DependencyStatus{
+		Name:      "Mount directory",
+		Installed: true,
+	}
+	if err := checkMountBaseDir(mountBaseDir); err != nil {
+		dirStatus.Installed = false
+		dirStatus.Message = err.Error()
+	}
+	results = append(results, dirStatus)
+
+	return results
+}
+
 // checkRclone verifies the rclone binary is present and executable.
 func checkRclone(rclonePath string) error {
 	resolved, err := exec.LookPath(rclonePath)
