@@ -234,6 +234,56 @@ func (c *GoogleDriveConnector) BuildRemoteConfig(_ context.Context, account Acco
 	}, nil
 }
 
+type OneDriveConnector struct{}
+
+func NewOneDriveConnector() *OneDriveConnector {
+	return &OneDriveConnector{}
+}
+
+func (c *OneDriveConnector) Provider() Provider {
+	return ProviderOneDrive
+}
+
+func (c *OneDriveConnector) Capability() ProviderCapability {
+	return ProviderCapability{
+		Provider:   ProviderOneDrive,
+		Label:      "OneDrive",
+		AuthScheme: "oauth",
+		Fields: []CapabilityField{
+			{Key: "drive_id", Label: "Drive ID", Placeholder: "Drive ID (optional)"},
+			{Key: "drive_type", Label: "Drive Type", Placeholder: "personal, business, or documentLibrary (optional)"},
+		},
+	}
+}
+
+func (c *OneDriveConnector) RemoteName(accountID string) string {
+	return fmt.Sprintf("onedrive-%s", accountID)
+}
+
+func (c *OneDriveConnector) BuildRemoteConfig(_ context.Context, account AccountConfig) (RemoteConfig, error) {
+	if strings.TrimSpace(account.AccountID) == "" {
+		return RemoteConfig{}, fmt.Errorf("account ID is required")
+	}
+
+	normalized := map[string]string{}
+
+	if driveID := strings.TrimSpace(account.Options["drive_id"]); driveID != "" {
+		normalized["drive_id"] = driveID
+	}
+	if driveType := strings.TrimSpace(account.Options["drive_type"]); driveType != "" {
+		normalized["drive_type"] = driveType
+	}
+	if token := strings.TrimSpace(account.Options["token"]); token != "" {
+		normalized["token"] = token
+	}
+
+	return RemoteConfig{
+		Name:    c.RemoteName(account.AccountID),
+		Type:    "onedrive",
+		Options: normalized,
+	}, nil
+}
+
 func requiredOption(options map[string]string, key string) (string, error) {
 	value := strings.TrimSpace(options[key])
 	if value == "" {

@@ -117,6 +117,7 @@ func NewApp() *App {
 	registry := connectors.NewRegistry()
 	registry.Register(connectors.NewS3Connector())
 	registry.Register(connectors.NewGoogleDriveConnector())
+	registry.Register(connectors.NewOneDriveConnector())
 
 	mountStateRepo := storage.NewSQLiteMountStateRepository(db)
 	secretStore := storage.NewSQLiteSecretStore(db)

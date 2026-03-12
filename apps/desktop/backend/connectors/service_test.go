@@ -125,6 +125,114 @@ func TestGoogleDriveConnector_Capability(t *testing.T) {
 	}
 }
 
+func TestOneDriveConnector_Capability(t *testing.T) {
+	t.Parallel()
+
+	capability := NewOneDriveConnector().Capability()
+	if capability.Provider != ProviderOneDrive {
+		t.Fatalf("Provider = %q, want %q", capability.Provider, ProviderOneDrive)
+	}
+	if capability.AuthScheme != "oauth" {
+		t.Fatalf("AuthScheme = %q, want oauth", capability.AuthScheme)
+	}
+	if capability.Label != "OneDrive" {
+		t.Fatalf("Label = %q, want OneDrive", capability.Label)
+	}
+	if len(capability.Fields) != 2 {
+		t.Fatalf("Fields len = %d, want 2", len(capability.Fields))
+	}
+}
+
+func TestOneDriveConnector_RemoteName(t *testing.T) {
+	t.Parallel()
+
+	name := NewOneDriveConnector().RemoteName("myaccount")
+	if name != "onedrive-myaccount" {
+		t.Fatalf("RemoteName = %q, want onedrive-myaccount", name)
+	}
+}
+
+func TestOneDriveConnector_BuildRemoteConfig_Success(t *testing.T) {
+	t.Parallel()
+
+	connector := NewOneDriveConnector()
+	config, err := connector.BuildRemoteConfig(context.Background(), AccountConfig{
+		AccountID: "od-1",
+		Provider:  ProviderOneDrive,
+		Options: map[string]string{
+			"drive_id":   "abc123",
+			"drive_type": "business",
+			"token":      "token-json",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildRemoteConfig() error = %v", err)
+	}
+
+	if config.Name != "onedrive-od-1" {
+		t.Fatalf("Name = %q, want onedrive-od-1", config.Name)
+	}
+	if config.Type != "onedrive" {
+		t.Fatalf("Type = %q, want onedrive", config.Type)
+	}
+	if config.Options["drive_id"] != "abc123" {
+		t.Fatalf("drive_id = %q, want abc123", config.Options["drive_id"])
+	}
+	if config.Options["drive_type"] != "business" {
+		t.Fatalf("drive_type = %q, want business", config.Options["drive_type"])
+	}
+	if config.Options["token"] != "token-json" {
+		t.Fatalf("token = %q, want token-json", config.Options["token"])
+	}
+}
+
+func TestOneDriveConnector_BuildRemoteConfig_EmptyAccountID(t *testing.T) {
+	t.Parallel()
+
+	connector := NewOneDriveConnector()
+	_, err := connector.BuildRemoteConfig(context.Background(), AccountConfig{
+		AccountID: "",
+		Provider:  ProviderOneDrive,
+		Options:   map[string]string{},
+	})
+	if err == nil {
+		t.Fatalf("BuildRemoteConfig() error = nil, want error")
+	}
+}
+
+func TestOneDriveConnector_BuildRemoteConfig_MinimalOptions(t *testing.T) {
+	t.Parallel()
+
+	connector := NewOneDriveConnector()
+	config, err := connector.BuildRemoteConfig(context.Background(), AccountConfig{
+		AccountID: "od-2",
+		Provider:  ProviderOneDrive,
+		Options:   map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("BuildRemoteConfig() error = %v", err)
+	}
+
+	if config.Name != "onedrive-od-2" {
+		t.Fatalf("Name = %q, want onedrive-od-2", config.Name)
+	}
+	if config.Type != "onedrive" {
+		t.Fatalf("Type = %q, want onedrive", config.Type)
+	}
+	if len(config.Options) != 0 {
+		t.Fatalf("Options = %+v, want empty", config.Options)
+	}
+}
+
+func TestSecretKeys_OneDrive_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	keys := SecretKeys(NewOneDriveConnector().Capability())
+	if len(keys) != 0 {
+		t.Fatalf("SecretKeys(onedrive) = %v, want empty", keys)
+	}
+}
+
 func TestGoogleDriveConnector_BuildRemoteConfig_Success(t *testing.T) {
 	t.Parallel()
 
