@@ -5,6 +5,7 @@ import (
 	"KDrive/backend/connectors"
 	"KDrive/backend/mount"
 	"KDrive/backend/storage"
+	syncpkg "KDrive/backend/sync"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -63,6 +64,26 @@ type MountStatusView struct {
 	ErrorCategory string `json:"errorCategory"`
 }
 
+type SyncStatusView struct {
+	AccountID        string `json:"accountId"`
+	State            string `json:"state"`
+	LastSyncAt       string `json:"lastSyncAt"`
+	LastError        string `json:"lastError"`
+	ConflictCount    int    `json:"conflictCount"`
+	FilesSynced      int    `json:"filesSynced"`
+	BytesTransferred int64  `json:"bytesTransferred"`
+}
+
+type SyncConflictView struct {
+	ID            string `json:"id"`
+	AccountID     string `json:"accountId"`
+	FilePath      string `json:"filePath"`
+	LocalModTime  string `json:"localModTime"`
+	RemoteModTime string `json:"remoteModTime"`
+	Resolution    string `json:"resolution"`
+	CreatedAt     string `json:"createdAt"`
+}
+
 // App struct
 type App struct {
 	ctx                  context.Context
@@ -73,6 +94,9 @@ type App struct {
 	mountStateRepository storage.MountStateRepository
 	secretStore          storage.SecretStore
 	authService          auth.Service
+	syncService          *syncpkg.Service
+	syncStateRepo        storage.SyncStateRepository
+	syncConflictRepo     storage.SyncConflictRepository
 
 	retryMu        sync.Mutex
 	retryCounts    map[string]int
@@ -93,6 +117,9 @@ func NewApp() *App {
 
 	mountStateRepo := storage.NewSQLiteMountStateRepository(db)
 	secretStore := storage.NewSQLiteSecretStore(db)
+	syncStateRepo := storage.NewSQLiteSyncStateRepository(db)
+	syncConflictRepo := storage.NewSQLiteSyncConflictRepository(db)
+	syncService := syncpkg.NewService(syncStateRepo, syncConflictRepo)
 
 	a := &App{
 		db:                   db,
@@ -101,6 +128,9 @@ func NewApp() *App {
 		mountStateRepository: mountStateRepo,
 		secretStore:          secretStore,
 		authService:          auth.NewService(auth.NewSecretBackedTokenStore(secretStore)),
+		syncService:          syncService,
+		syncStateRepo:        syncStateRepo,
+		syncConflictRepo:     syncConflictRepo,
 		retryCounts:          make(map[string]int),
 		stoppedByUser:        make(map[string]bool),
 		retryBaseDelay:       5 * time.Second,
@@ -581,4 +611,78 @@ func errorCategoryFromErr(err error) string {
 		return "config_invalid"
 	}
 	return "process_failed"
+}
+
+// GetSyncStatus returns the sync status for an account
+func (a *App) GetSyncStatus(accountID string) (SyncStatusView, error) {
+	status, err := a.syncService.GetStatus(a.ctx, accountID)
+	if err != nil {
+		return SyncStatusView{}, err
+	}
+
+	return syncStatusToView(status), nil
+}
+
+// ListSyncStatuses returns sync statuses for all accounts
+func (a *App) ListSyncStatuses() ([]SyncStatusView, error) {
+	statuses, err := a.syncService.ListStatuses(a.ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	views := make([]SyncStatusView, len(statuses))
+	for i, status := range statuses {
+		views[i] = syncStatusToView(status)
+	}
+
+	return views, nil
+}
+
+// ListSyncConflicts returns conflicts for an account
+func (a *App) ListSyncConflicts(accountID string) ([]SyncConflictView, error) {
+	conflicts, err := a.syncService.ListConflicts(a.ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	views := make([]SyncConflictView, len(conflicts))
+	for i, conflict := range conflicts {
+		views[i] = syncConflictToView(conflict)
+	}
+
+	return views, nil
+}
+
+// ResolveSyncConflict resolves a sync conflict
+func (a *App) ResolveSyncConflict(accountID, conflictID string) error {
+	return a.syncService.ResolveConflict(a.ctx, accountID, conflictID)
+}
+
+func syncStatusToView(status storage.SyncStatus) SyncStatusView {
+	lastSyncAt := ""
+	if !status.LastSyncAt.IsZero() {
+		lastSyncAt = status.LastSyncAt.Format(time.RFC3339)
+	}
+
+	return SyncStatusView{
+		AccountID:        status.AccountID,
+		State:            string(status.State),
+		LastSyncAt:       lastSyncAt,
+		LastError:        status.LastError,
+		ConflictCount:    status.ConflictCount,
+		FilesSynced:      status.FilesSynced,
+		BytesTransferred: status.BytesTransferred,
+	}
+}
+
+func syncConflictToView(conflict storage.SyncConflict) SyncConflictView {
+	return SyncConflictView{
+		ID:            conflict.ID,
+		AccountID:     conflict.AccountID,
+		FilePath:      conflict.FilePath,
+		LocalModTime:  conflict.LocalModTime.Format(time.RFC3339),
+		RemoteModTime: conflict.RemoteModTime.Format(time.RFC3339),
+		Resolution:    conflict.Resolution,
+		CreatedAt:     conflict.CreatedAt.Format(time.RFC3339),
+	}
 }
