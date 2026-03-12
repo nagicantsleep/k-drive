@@ -142,3 +142,42 @@
 .actions__retry:hover:not(:disabled) {
   background: #fef2f2;
 }
+
+.sync-status {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.sync-status__syncing {
+  color: #0369a1;
+}
+
+.sync-status__spinner {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.sync-status__success {
+  color: #16a34a;
+}
+
+.sync-status__error {
+  color: #dc2626;
+}
+
+.sync-status__conflict {
+  color: #d97706;
+}
+
+.sync-status__offline {
+  color: #6b7280;
+}
+
+.sync-status__idle {
+  color: #94a3b8;
+}

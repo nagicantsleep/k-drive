@@ -14,6 +14,26 @@ type MountStatus = {
   errorCategory: string;
 };
 
+type SyncStatus = {
+  accountId: string;
+  state: 'idle' | 'syncing' | 'success' | 'error' | 'conflict' | 'needs_resolve' | 'retrying' | 'offline' | string;
+  lastSyncAt: string;
+  lastError: string;
+  conflictCount: number;
+  filesSynced: number;
+  bytesTransferred: number;
+};
+
+type SyncConflict = {
+  id: string;
+  accountId: string;
+  filePath: string;
+  localModTime: string;
+  remoteModTime: string;
+  resolution: string;
+  createdAt: string;
+};
+
 type CapabilityField = {
   key: string;
   label: string;
@@ -48,6 +68,8 @@ function App() {
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [statuses, setStatuses] = useState<Record<string, MountStatus>>({});
+  const [syncStatuses, setSyncStatuses] = useState<Record<string, SyncStatus>>({});
+  const [syncConflicts, setSyncConflicts] = useState<Record<string, SyncConflict[]>>({});
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -56,6 +78,9 @@ function App() {
 
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
+
+  const syncStatusesRef = useRef(syncStatuses);
+  syncStatusesRef.current = syncStatuses;
 
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
@@ -79,10 +104,52 @@ function App() {
     return next;
   }
 
+  async function refreshSyncStatuses(accountList: Account[]) {
+    try {
+      const syncStatusList = (await go.ListSyncStatuses()) as SyncStatus[];
+      const next: Record<string, SyncStatus> = {};
+      for (const status of syncStatusList) {
+        next[status.accountId] = status;
+      }
+      // Set default for accounts without sync status
+      for (const account of accountList) {
+        if (!next[account.id]) {
+          next[account.id] = {
+            accountId: account.id,
+            state: 'idle',
+            lastSyncAt: '',
+            lastError: '',
+            conflictCount: 0,
+            filesSynced: 0,
+            bytesTransferred: 0,
+          };
+        }
+      }
+      setSyncStatuses(next);
+      return next;
+    } catch {
+      // If sync status is not available, set defaults
+      const next: Record<string, SyncStatus> = {};
+      for (const account of accountList) {
+        next[account.id] = {
+          accountId: account.id,
+          state: 'idle',
+          lastSyncAt: '',
+          lastError: '',
+          conflictCount: 0,
+          filesSynced: 0,
+          bytesTransferred: 0,
+        };
+      }
+      setSyncStatuses(next);
+      return next;
+    }
+  }
+
   async function refreshAccounts() {
     const nextAccounts = (await go.ListAccounts()) as Account[];
     setAccounts(nextAccounts);
-    await refreshStatuses(nextAccounts);
+    await Promise.all([refreshStatuses(nextAccounts), refreshSyncStatuses(nextAccounts)]);
     return nextAccounts;
   }
 
@@ -127,6 +194,20 @@ function App() {
 
     return () => clearInterval(interval);
   }, [statuses]);
+
+  // Poll sync status while any account is syncing.
+  useEffect(() => {
+    const hasSyncing = Object.values(syncStatusesRef.current).some((s) => s.state === 'syncing' || s.state === 'retrying');
+    if (!hasSyncing) return;
+
+    const interval = setInterval(async () => {
+      const updated = await refreshSyncStatuses(accountsRef.current);
+      const stillSyncing = Object.values(updated).some((s) => s.state === 'syncing' || s.state === 'retrying');
+      if (!stillSyncing) clearInterval(interval);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [syncStatuses]);
 
   async function onCreateAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -206,6 +287,26 @@ function App() {
     return CATEGORY_LABELS[cat] ?? cat;
   }
 
+  function formatSyncTime(isoTime: string): string {
+    if (!isoTime) return '';
+    try {
+      const date = new Date(isoTime);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+
+      if (diffMins < 1) return 'just now';
+      if (diffMins < 60) return `${diffMins}m ago`;
+      if (diffHours < 24) return `${diffHours}h ago`;
+      if (diffDays < 7) return `${diffDays}d ago`;
+      return date.toLocaleDateString();
+    } catch {
+      return isoTime;
+    }
+  }
+
   if (loading) {
     return (
       <div className="app">
@@ -261,11 +362,15 @@ function App() {
         {accounts.map((account) => {
           const busy = pendingAction[account.id] ?? false;
           const status = statuses[account.id];
+          const syncStatus = syncStatuses[account.id];
           const state = status?.state ?? 'stopped';
+          const syncState = syncStatus?.state ?? 'idle';
           const isMounting = state === 'mounting';
           const isMounted = state === 'mounted';
           const isFailed = state === 'failed';
           const isStopped = state === 'stopped';
+          const isSyncing = syncState === 'syncing' || syncState === 'retrying';
+          const hasConflicts = syncStatus?.conflictCount && syncStatus.conflictCount > 0;
 
           return (
             <li key={account.id}>
@@ -283,6 +388,35 @@ function App() {
                   </div>
                 )}
               </div>
+              {isMounted && (
+                <div className={`sync-status sync-status--${syncState}`}>
+                  {isSyncing ? (
+                    <span className="sync-status__syncing">
+                      <span className="sync-status__spinner">⟳</span> Syncing…
+                    </span>
+                  ) : syncState === 'success' && syncStatus?.lastSyncAt ? (
+                    <span className="sync-status__success">
+                      ✓ Synced {formatSyncTime(syncStatus.lastSyncAt)}
+                    </span>
+                  ) : syncState === 'error' ? (
+                    <span className="sync-status__error">
+                      ⚠ Sync error: {syncStatus?.lastError || 'Unknown error'}
+                    </span>
+                  ) : syncState === 'conflict' || hasConflicts ? (
+                    <span className="sync-status__conflict">
+                      ⚠ {syncStatus?.conflictCount || 0} conflict{syncStatus?.conflictCount !== 1 ? 's' : ''}
+                    </span>
+                  ) : syncState === 'offline' ? (
+                    <span className="sync-status__offline">
+                      ○ Offline
+                    </span>
+                  ) : (
+                    <span className="sync-status__idle">
+                      Sync: idle
+                    </span>
+                  )}
+                </div>
+              )}
               <div className="actions">
                 <button
                   type="button"
