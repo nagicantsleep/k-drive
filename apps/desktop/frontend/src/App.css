@@ -194,6 +194,15 @@
   color: #94a3b8;
 }
 
+.actions__delete {
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+.actions__delete:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
 .setup-wizard {
   padding: 1.5rem;
   border: 1px solid #e5e7eb;

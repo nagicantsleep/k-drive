@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 )
@@ -584,6 +585,50 @@ func (a *App) UnmountAccount(accountID string) error {
 	}
 
 	return nil
+}
+
+// DeleteAccount unmounts (if mounted), removes the account, its secrets, mount state, and rclone config.
+func (a *App) DeleteAccount(accountID string) error {
+	if err := connectors.ValidateAccountID(accountID); err != nil {
+		return err
+	}
+
+	account, err := a.accountByID(accountID)
+	if err != nil {
+		return err
+	}
+
+	// Unmount first if active.
+	_ = a.UnmountAccount(accountID)
+
+	// Delete rclone config.
+	if connector, ok := a.connectorRegistry.Get(connectors.Provider(account.Provider)); ok {
+		_ = a.mountManager.DeleteConfig(connector.RemoteName(accountID))
+	}
+
+	// Delete secrets.
+	if connector, ok := a.connectorRegistry.Get(connectors.Provider(account.Provider)); ok {
+		for _, secretKey := range connectors.SecretKeys(connector.Capability()) {
+			_ = a.secretStore.Delete(a.ctx, secretStoreKey(accountID, secretKey))
+		}
+	}
+
+	// Delete mount state and account from DB.
+	_ = a.mountStateRepository.Delete(a.ctx, accountID)
+	return a.accountRepository.Delete(a.ctx, accountID)
+}
+
+// OpenMountFolder opens the mounted drive folder in the system file explorer.
+func (a *App) OpenMountFolder(accountID string) error {
+	status, err := a.AccountMountStatus(accountID)
+	if err != nil {
+		return err
+	}
+	if status.MountPath == "" {
+		// Fall back to default path.
+		status.MountPath = mount.DefaultMountBaseDir() + `\` + accountID
+	}
+	return exec.Command("explorer.exe", status.MountPath).Start()
 }
 
 // AccountMountStatus returns the current mount status from the process manager. When the

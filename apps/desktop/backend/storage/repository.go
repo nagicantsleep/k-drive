@@ -71,11 +71,13 @@ type SyncConflict struct {
 type AccountRepository interface {
 	Save(ctx context.Context, account Account) error
 	List(ctx context.Context) ([]Account, error)
+	Delete(ctx context.Context, accountID string) error
 }
 
 type MountStateRepository interface {
 	Upsert(ctx context.Context, state MountState) error
 	Get(ctx context.Context, accountID string) (MountState, error)
+	Delete(ctx context.Context, accountID string) error
 }
 
 type SyncStateRepository interface {
@@ -174,6 +176,14 @@ func (r *SQLiteAccountRepository) List(ctx context.Context) ([]Account, error) {
 	return accounts, nil
 }
 
+func (r *SQLiteAccountRepository) Delete(ctx context.Context, accountID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
+	if err != nil {
+		return fmt.Errorf("delete account: %w", err)
+	}
+	return nil
+}
+
 func (r *SQLiteMountStateRepository) Upsert(ctx context.Context, state MountState) error {
 	updatedAt := state.UpdatedAt
 	if updatedAt.IsZero() {
@@ -217,6 +227,14 @@ func (r *SQLiteMountStateRepository) Get(ctx context.Context, accountID string) 
 	state.UpdatedAt = updatedAt
 
 	return state, nil
+}
+
+func (r *SQLiteMountStateRepository) Delete(ctx context.Context, accountID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM mount_states WHERE account_id = ?`, accountID)
+	if err != nil {
+		return fmt.Errorf("delete mount state: %w", err)
+	}
+	return nil
 }
 
 func (r *SQLiteSyncStateRepository) UpsertSyncStatus(ctx context.Context, status SyncStatus) error {

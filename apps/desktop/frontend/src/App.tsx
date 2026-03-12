@@ -315,6 +315,29 @@ function App() {
     }
   }
 
+  async function deleteAccount(id: string) {
+    if (!confirm(`Delete account "${id}"? This will unmount and remove all data.`)) return;
+    setPendingAction((p) => ({ ...p, [id]: true }));
+    setError('');
+    try {
+      await go.DeleteAccount(id);
+      await refreshAccounts();
+      go.AvailableDriveLetters().then((letters: string[]) => setAvailableLetters(letters)).catch(() => {});
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setPendingAction((p) => ({ ...p, [id]: false }));
+    }
+  }
+
+  async function openMountFolder(id: string) {
+    try {
+      await go.OpenMountFolder(id);
+    } catch (e: any) {
+      setError(String(e));
+    }
+  }
+
   function categoryLabel(cat: string) {
     return CATEGORY_LABELS[cat] ?? cat;
   }
@@ -528,6 +551,24 @@ function App() {
                     {busy ? '…' : 'Retry'}
                   </button>
                 )}
+                {isMounted && (
+                  <button
+                    type="button"
+                    onClick={() => openMountFolder(account.id)}
+                    title="Open in Explorer"
+                  >
+                    📂 Open
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="actions__delete"
+                  onClick={() => deleteAccount(account.id)}
+                  disabled={busy}
+                  title="Delete account"
+                >
+                  🗑 Delete
+                </button>
               </div>
             </li>
           );
