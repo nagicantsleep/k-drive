@@ -97,6 +97,7 @@ func newTestApp(db *sql.DB, secretStore storage.SecretStore, mountMgr mount.Mana
 	registry := connectors.NewRegistry()
 	registry.Register(connectors.NewS3Connector())
 	registry.Register(connectors.NewGoogleDriveConnector())
+	registry.Register(connectors.NewOneDriveConnector())
 
 	a := &App{
 		db:                   db,
@@ -174,8 +175,8 @@ func TestProviderCapabilities_ReturnsConnectorMetadata(t *testing.T) {
 
 	a := newTestApp(openAppTestDB(t), newStubSecretStore(), &stubMountManager{})
 	capabilities := a.ProviderCapabilities()
-	if len(capabilities) != 2 {
-		t.Fatalf("ProviderCapabilities() len = %d, want 2", len(capabilities))
+	if len(capabilities) != 3 {
+		t.Fatalf("ProviderCapabilities() len = %d, want 3", len(capabilities))
 	}
 
 	if capabilities[0].Provider != string(connectors.ProviderGoogle) {
@@ -185,14 +186,21 @@ func TestProviderCapabilities_ReturnsConnectorMetadata(t *testing.T) {
 		t.Fatalf("google authScheme = %q, want oauth", capabilities[0].AuthScheme)
 	}
 
-	if capabilities[1].Provider != string(connectors.ProviderS3) {
-		t.Fatalf("second provider = %q, want %q", capabilities[1].Provider, connectors.ProviderS3)
+	if capabilities[1].Provider != string(connectors.ProviderOneDrive) {
+		t.Fatalf("second provider = %q, want %q", capabilities[1].Provider, connectors.ProviderOneDrive)
 	}
-	if len(capabilities[1].Fields) != 5 {
-		t.Fatalf("s3 field count = %d, want 5", len(capabilities[1].Fields))
+	if capabilities[1].AuthScheme != "oauth" {
+		t.Fatalf("onedrive authScheme = %q, want oauth", capabilities[1].AuthScheme)
 	}
-	if !capabilities[1].Fields[3].Secret || !capabilities[1].Fields[4].Secret {
-		t.Fatalf("s3 secret field metadata missing = %+v", capabilities[1].Fields)
+
+	if capabilities[2].Provider != string(connectors.ProviderS3) {
+		t.Fatalf("third provider = %q, want %q", capabilities[2].Provider, connectors.ProviderS3)
+	}
+	if len(capabilities[2].Fields) != 5 {
+		t.Fatalf("s3 field count = %d, want 5", len(capabilities[2].Fields))
+	}
+	if !capabilities[2].Fields[3].Secret || !capabilities[2].Fields[4].Secret {
+		t.Fatalf("s3 secret field metadata missing = %+v", capabilities[2].Fields)
 	}
 }
 
@@ -1036,5 +1044,154 @@ func TestAvailableDriveLetters_ReturnsLetters(t *testing.T) {
 	}
 	if len(letters) == 0 {
 		t.Fatal("expected at least one available drive letter")
+	}
+}
+
+func TestResolveOAuthProvider_OneDrive(t *testing.T) {
+	t.Parallel()
+
+	provider, tokenURL, authURL, scopes, err := resolveOAuthProvider(string(connectors.ProviderOneDrive))
+	if err != nil {
+		t.Fatalf("resolveOAuthProvider() error = %v", err)
+	}
+	if provider != auth.OAuthProviderMicrosoft {
+		t.Fatalf("provider = %q, want %q", provider, auth.OAuthProviderMicrosoft)
+	}
+	if tokenURL != "https://login.microsoftonline.com/common/oauth2/v2.0/token" {
+		t.Fatalf("tokenURL = %q", tokenURL)
+	}
+	if authURL != "https://login.microsoftonline.com/common/oauth2/v2.0/authorize" {
+		t.Fatalf("authURL = %q", authURL)
+	}
+	if len(scopes) != 2 || scopes[0] != "Files.ReadWrite.All" || scopes[1] != "offline_access" {
+		t.Fatalf("scopes = %v", scopes)
+	}
+}
+
+func TestResolveOAuthProvider_MicrosoftAlias(t *testing.T) {
+	t.Parallel()
+
+	provider, _, _, _, err := resolveOAuthProvider(string(auth.OAuthProviderMicrosoft))
+	if err != nil {
+		t.Fatalf("resolveOAuthProvider(microsoft) error = %v", err)
+	}
+	if provider != auth.OAuthProviderMicrosoft {
+		t.Fatalf("provider = %q, want %q", provider, auth.OAuthProviderMicrosoft)
+	}
+}
+
+func TestMountAccount_OneDriveIncludesOAuthTokenInRemoteConfig(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	db := openAppTestDB(t)
+	mgr := &stubMountManager{}
+	a := newTestApp(db, stub, mgr)
+
+	tokenStore := auth.NewSecretBackedTokenStore(stub)
+	err := tokenStore.Save(context.Background(), auth.OAuthProviderMicrosoft, "od-acc", auth.OAuthToken{
+		AccessToken:  "ms-access-123",
+		RefreshToken: "ms-refresh-456",
+		Expiry:       time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("tokenStore.Save() error = %v", err)
+	}
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID:       "od-acc",
+		Provider: string(connectors.ProviderOneDrive),
+		Email:    "onedrive.user@example.com",
+		Options:  map[string]string{},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if err := a.MountAccount("od-acc", ""); err != nil {
+		t.Fatalf("MountAccount() error = %v", err)
+	}
+	if len(mgr.writtenConfigs) != 1 {
+		t.Fatalf("WriteConfig called %d times, want 1", len(mgr.writtenConfigs))
+	}
+
+	remote := mgr.writtenConfigs[0]
+	if remote.Type != "onedrive" {
+		t.Fatalf("remote.Type = %q, want onedrive", remote.Type)
+	}
+	if remote.Name != "onedrive-od-acc" {
+		t.Fatalf("remote.Name = %q, want onedrive-od-acc", remote.Name)
+	}
+
+	tokenJSON := remote.Options["token"]
+	if tokenJSON == "" {
+		t.Fatal("remote token option is empty")
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(tokenJSON), &payload); err != nil {
+		t.Fatalf("token JSON invalid: %v", err)
+	}
+	if payload["access_token"] != "ms-access-123" {
+		t.Fatalf("access_token = %q, want ms-access-123", payload["access_token"])
+	}
+	if payload["refresh_token"] != "ms-refresh-456" {
+		t.Fatalf("refresh_token = %q, want ms-refresh-456", payload["refresh_token"])
+	}
+}
+
+func TestMountAccount_OneDriveMissingOAuthTokenFailsAsConfigInvalid(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	db := openAppTestDB(t)
+	a := newTestApp(db, stub, &stubMountManager{})
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID:       "od-no-token",
+		Provider: string(connectors.ProviderOneDrive),
+		Email:    "onedrive.user@example.com",
+		Options:  map[string]string{},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	err := a.MountAccount("od-no-token", "")
+	if err == nil {
+		t.Fatal("MountAccount() expected error, got nil")
+	}
+	if errorCategoryFromErr(err) != "config_invalid" {
+		t.Fatalf("error category = %q, want config_invalid", errorCategoryFromErr(err))
+	}
+}
+
+func TestCreateOAuthAccount_OneDrive(t *testing.T) {
+	t.Parallel()
+
+	db := openAppTestDB(t)
+	a := newTestApp(db, newStubSecretStore(), &stubMountManager{})
+
+	view, err := a.CreateOAuthAccount(CreateOAuthAccountRequest{
+		AccountID: "od-oauth-1",
+		Provider:  string(connectors.ProviderOneDrive),
+		Email:     "onedrive.user@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateOAuthAccount() error = %v", err)
+	}
+	if view.ID != "od-oauth-1" {
+		t.Fatalf("ID = %q, want od-oauth-1", view.ID)
+	}
+	if view.Provider != string(connectors.ProviderOneDrive) {
+		t.Fatalf("Provider = %q, want %q", view.Provider, connectors.ProviderOneDrive)
+	}
+
+	accounts, err := a.accountRepository.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("List() len = %d, want 1", len(accounts))
+	}
+	if accounts[0].ID != "od-oauth-1" || accounts[0].Provider != string(connectors.ProviderOneDrive) {
+		t.Fatalf("saved account mismatch = %+v", accounts[0])
 	}
 }
