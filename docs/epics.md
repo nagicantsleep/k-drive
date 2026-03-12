@@ -16,7 +16,7 @@
 | Google Drive Vertical Slice | [#32](https://github.com/nagicantsleep/k-drive/issues/32) | CLOSED |
 | Explicit Sync Foundation | [#37](https://github.com/nagicantsleep/k-drive/issues/37) | CLOSED |
 | Windows Drive Experience Hardening | [#38](https://github.com/nagicantsleep/k-drive/issues/38) | CLOSED |
-| OneDrive Vertical Slice | [#39](https://github.com/nagicantsleep/k-drive/issues/39) | OPEN |
+| OneDrive Vertical Slice | [#39](https://github.com/nagicantsleep/k-drive/issues/39) | CLOSED |
 | macOS Platform Support | [#40](https://github.com/nagicantsleep/k-drive/issues/40) | OPEN |
 
 ## GitHub Commands for Epic Management
