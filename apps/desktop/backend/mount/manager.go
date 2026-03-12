@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -304,10 +305,6 @@ func (m *ProcessManager) notifyStateChange(accountID string, state State, lastEr
 	}
 }
 
-func DefaultMountBaseDir() string {
-	return `C:\KDrive`
-}
-
 func mountPointPath(baseDir, accountID string) string {
-	return fmt.Sprintf(`%s\%s`, baseDir, accountID)
+	return filepath.Join(baseDir, accountID)
 }

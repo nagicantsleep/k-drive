@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -646,9 +646,9 @@ func (a *App) OpenMountFolder(accountID string) error {
 	}
 	if status.MountPath == "" {
 		// Fall back to default path.
-		status.MountPath = mount.DefaultMountBaseDir() + `\` + accountID
+		status.MountPath = filepath.Join(mount.DefaultMountBaseDir(), accountID)
 	}
-	return exec.Command("explorer.exe", status.MountPath).Start()
+	return openInFileExplorer(status.MountPath)
 }
 
 // AccountMountStatus returns the current mount status from the process manager. When the

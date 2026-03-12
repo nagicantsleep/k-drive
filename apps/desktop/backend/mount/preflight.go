@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // PreflightCategory classifies why a preflight check failed.
@@ -122,7 +123,7 @@ func checkMountBaseDir(dir string) error {
 		}
 	}
 
-	probe := dir + `\.kdrive-probe`
+	probe := filepath.Join(dir, ".kdrive-probe")
 	if err := os.WriteFile(probe, []byte("x"), 0o600); err != nil {
 		return &PreflightError{
 			Category: PreflightPathError,
