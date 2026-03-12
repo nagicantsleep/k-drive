@@ -58,7 +58,7 @@ func (m *stubMountManager) WriteConfig(remote connectors.RemoteConfig) error {
 
 func (m *stubMountManager) DeleteConfig(_ string) error { return nil }
 
-func (m *stubMountManager) Mount(_ context.Context, accountID string) error {
+func (m *stubMountManager) Mount(_ context.Context, accountID, remoteName, mountPath string) error {
 	m.mountedIDs = append(m.mountedIDs, accountID)
 	return nil
 }
@@ -219,7 +219,7 @@ func TestMountAccount_ConfigWrittenAndProcessStarted(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	if err := a.MountAccount("acc-test"); err != nil {
+	if err := a.MountAccount("acc-test", ""); err != nil {
 		t.Fatalf("MountAccount() error = %v", err)
 	}
 
@@ -297,7 +297,7 @@ func TestOnMountStateChange_FailedTriggersRetry(t *testing.T) {
 	}
 
 	// Simulate the first mount (sets retry count to 0).
-	if err := a.MountAccount("acc-1"); err != nil {
+	if err := a.MountAccount("acc-1", ""); err != nil {
 		t.Fatalf("MountAccount error = %v", err)
 	}
 	// First Mount call is counted.
@@ -335,7 +335,7 @@ func TestOnMountStateChange_ExplicitUnmountSuppressesRetry(t *testing.T) {
 		t.Fatalf("Save error = %v", err)
 	}
 
-	if err := a.MountAccount("acc-1"); err != nil {
+	if err := a.MountAccount("acc-1", ""); err != nil {
 		t.Fatalf("MountAccount error = %v", err)
 	}
 	initialMounts := len(mgr.mountedIDs)
@@ -427,7 +427,7 @@ type errorMountManager struct {
 	err error
 }
 
-func (m *errorMountManager) Mount(_ context.Context, _ string) error {
+func (m *errorMountManager) Mount(_ context.Context, _, _, _ string) error {
 	return m.err
 }
 
@@ -447,7 +447,7 @@ func TestErrorCategoryFromErr_ConfigInvalid(t *testing.T) {
 		t.Fatalf("Save error = %v", err)
 	}
 
-	err := a.doMount("acc-nokey")
+	err := a.doMount("acc-nokey", "")
 	if err == nil {
 		t.Fatal("doMount(missing credentials) expected error, got nil")
 	}
@@ -472,7 +472,7 @@ func TestMountAccount_ConfigInvalidPersistsFailedState(t *testing.T) {
 		t.Fatalf("Save error = %v", err)
 	}
 
-	err := a.MountAccount("acc-nokey")
+	err := a.MountAccount("acc-nokey", "")
 	if err == nil {
 		t.Fatal("MountAccount(missing credentials) expected error, got nil")
 	}
@@ -618,7 +618,7 @@ func TestLifecycle_AddMountUnmountRetry(t *testing.T) {
 	}
 
 	// Mount.
-	if err := a.MountAccount("acc-lifecycle"); err != nil {
+	if err := a.MountAccount("acc-lifecycle", ""); err != nil {
 		t.Fatalf("MountAccount error = %v", err)
 	}
 	if len(successMgr.mountedIDs) != 1 {
@@ -635,7 +635,7 @@ func TestLifecycle_AddMountUnmountRetry(t *testing.T) {
 	a.mountManager = failMgr
 
 	// Attempt mount — should fail with process_failed (the errorMountManager returns a plain error).
-	mountErr := a.MountAccount("acc-lifecycle")
+	mountErr := a.MountAccount("acc-lifecycle", "")
 	if mountErr == nil {
 		t.Fatal("MountAccount with failing manager expected error, got nil")
 	}
@@ -829,7 +829,7 @@ func TestMountAccount_GoogleIncludesOAuthTokenInRemoteConfig(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	if err := a.MountAccount("google-acc"); err != nil {
+	if err := a.MountAccount("google-acc", ""); err != nil {
 		t.Fatalf("MountAccount() error = %v", err)
 	}
 	if len(mgr.writtenConfigs) != 1 {
@@ -876,7 +876,7 @@ func TestMountAccount_GoogleMissingOAuthTokenFailsAsConfigInvalid(t *testing.T) 
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	err := a.MountAccount("google-no-token")
+	err := a.MountAccount("google-no-token", "")
 	if err == nil {
 		t.Fatal("MountAccount() expected error, got nil")
 	}

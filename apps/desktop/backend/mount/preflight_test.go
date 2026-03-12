@@ -57,7 +57,7 @@ func TestProcessManager_Mount_PreflightRcloneMissing(t *testing.T) {
 	t.Parallel()
 	manager := newTestManager(t, "nonexistent-rclone-binary-kdrive")
 
-	err := manager.Mount(nil, "acc-preflight") //nolint:staticcheck // intentional nil ctx for test
+	err := manager.Mount(nil, "acc-preflight", "test-remote", "") //nolint:staticcheck // intentional nil ctx for test
 	if err == nil {
 		t.Fatal("Mount() expected preflight error, got nil")
 	}

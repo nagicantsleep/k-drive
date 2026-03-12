@@ -12,6 +12,7 @@ type MountStatus = {
   state: 'stopped' | 'mounting' | 'mounted' | 'failed' | string;
   lastError: string;
   errorCategory: string;
+  mountPath: string;
 };
 
 type SyncStatus = {
@@ -65,6 +66,8 @@ function App() {
   const [oauthClientId, setOauthClientId] = useState('');
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapability[]>([]);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [mountPaths, setMountPaths] = useState<Record<string, string>>({});
+  const [availableLetters, setAvailableLetters] = useState<string[]>([]);
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [statuses, setStatuses] = useState<Record<string, MountStatus>>({});
@@ -97,7 +100,7 @@ function App() {
         const status = (await go.AccountMountStatus(account.id)) as MountStatus;
         next[account.id] = status;
       } catch {
-        next[account.id] = { accountId: account.id, state: 'stopped', lastError: '', errorCategory: '' };
+        next[account.id] = { accountId: account.id, state: 'stopped', lastError: '', errorCategory: '', mountPath: '' };
       }
     }
     setStatuses(next);
@@ -164,6 +167,7 @@ function App() {
 
   useEffect(() => {
     void Promise.all([refreshCapabilities(), refreshAccounts()]).finally(() => setLoading(false));
+    go.AvailableDriveLetters().then((letters: string[]) => setAvailableLetters(letters)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -257,9 +261,12 @@ function App() {
     setPendingAction((p) => ({ ...p, [id]: true }));
     setError('');
     try {
-      await go.MountAccount(id);
+      const chosenPath = mountPaths[id] ?? '';
+      await go.MountAccount(id, chosenPath);
       const status = (await go.AccountMountStatus(id)) as MountStatus;
       setStatuses((prev) => ({ ...prev, [id]: status }));
+      // Refresh available letters after mount.
+      go.AvailableDriveLetters().then((letters: string[]) => setAvailableLetters(letters)).catch(() => {});
     } catch (e: any) {
       setError(String(e));
       const status = (await go.AccountMountStatus(id).catch(() => null)) as MountStatus | null;
@@ -276,6 +283,7 @@ function App() {
       await go.UnmountAccount(id);
       const status = (await go.AccountMountStatus(id)) as MountStatus;
       setStatuses((prev) => ({ ...prev, [id]: status }));
+      go.AvailableDriveLetters().then((letters: string[]) => setAvailableLetters(letters)).catch(() => {});
     } catch (e: any) {
       setError(String(e));
     } finally {
@@ -379,6 +387,9 @@ function App() {
               </div>
               <div className={`mount-status mount-status--${state}`}>
                 {isMounting ? 'Connecting…' : `Status: ${state}`}
+                {isMounted && status?.mountPath && (
+                  <span className="mount-status__path"> — {status.mountPath}</span>
+                )}
                 {isFailed && status?.lastError && (
                   <div className="mount-status__error-detail">
                     {status.errorCategory && (
@@ -418,6 +429,19 @@ function App() {
                 </div>
               )}
               <div className="actions">
+                {(isStopped || isFailed) && (
+                  <select
+                    className="mount-path-select"
+                    value={mountPaths[account.id] ?? ''}
+                    onChange={(e) => setMountPaths((p) => ({ ...p, [account.id]: e.target.value }))}
+                    disabled={busy || isMounting || isMounted}
+                  >
+                    <option value="">Default folder</option>
+                    {availableLetters.map((letter) => (
+                      <option key={letter} value={letter + '\\'}>{letter} drive</option>
+                    ))}
+                  </select>
+                )}
                 <button
                   type="button"
                   onClick={() => mountAccount(account.id)}

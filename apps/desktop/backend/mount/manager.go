@@ -30,7 +30,7 @@ type Status struct {
 type Manager interface {
 	WriteConfig(remote connectors.RemoteConfig) error
 	DeleteConfig(remoteName string) error
-	Mount(ctx context.Context, accountID string) error
+	Mount(ctx context.Context, accountID, remoteName, mountPath string) error
 	Unmount(ctx context.Context, accountID string) error
 	Status(ctx context.Context, accountID string) (Status, error)
 }
@@ -95,7 +95,7 @@ func (m *ProcessManager) DeleteConfig(remoteName string) error {
 	return m.configMgr.DeleteRemote(remoteName)
 }
 
-func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
+func (m *ProcessManager) Mount(ctx context.Context, accountID, remoteName, mountPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -128,19 +128,21 @@ func (m *ProcessManager) Mount(ctx context.Context, accountID string) error {
 		return err
 	}
 
-	mountPoint := mountPointPath(m.mountBaseDir, accountID)
-	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+	// Use the provided mountPath, falling back to default.
+	effectivePath := mountPath
+	if effectivePath == "" {
+		effectivePath = mountPointPath(m.mountBaseDir, accountID)
+	}
+	if err := os.MkdirAll(effectivePath, 0o755); err != nil {
 		return fmt.Errorf("create mount point: %w", err)
 	}
-
-	remoteName := fmt.Sprintf("s3-%s", accountID)
 
 	cmdCtx, cancel := context.WithCancel(context.Background())
 
 	args := []string{
 		"mount",
 		fmt.Sprintf("%s:", remoteName),
-		mountPoint,
+		effectivePath,
 		"--config", m.configMgr.ConfigPath(),
 		"--vfs-cache-mode", "writes",
 	}

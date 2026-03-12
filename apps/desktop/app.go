@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -62,6 +63,7 @@ type MountStatusView struct {
 	State         string `json:"state"`
 	LastError     string `json:"lastError"`
 	ErrorCategory string `json:"errorCategory"`
+	MountPath     string `json:"mountPath"`
 }
 
 type SyncStatusView struct {
@@ -148,11 +150,18 @@ func NewApp() *App {
 
 // onMountStateChange persists the new state to SQLite and schedules retries on unexpected failure.
 func (a *App) onMountStateChange(accountID string, state mount.State, lastError string, mountErr error) {
+	// Preserve the existing mount_path from the DB during state transitions.
+	existingMountPath := ""
+	if existing, err := a.mountStateRepository.Get(context.Background(), accountID); err == nil {
+		existingMountPath = existing.MountPath
+	}
+
 	_ = a.mountStateRepository.Upsert(context.Background(), storage.MountState{
 		AccountID:     accountID,
 		State:         string(state),
 		LastError:     lastError,
 		ErrorCategory: classifyMountError(state, lastError, mountErr),
+		MountPath:     existingMountPath,
 	})
 
 	switch state {
@@ -177,7 +186,12 @@ func (a *App) onMountStateChange(accountID string, state mount.State, lastError 
 				skip := a.stoppedByUser[accountID]
 				a.retryMu.Unlock()
 				if !skip {
-					if err := a.doMount(accountID); err != nil {
+					// Retrieve persisted mount path for retry.
+					retryPath := ""
+					if ms, err := a.mountStateRepository.Get(context.Background(), accountID); err == nil {
+						retryPath = ms.MountPath
+					}
+					if err := a.doMount(accountID, retryPath); err != nil {
 						a.persistMountFailure(accountID, err)
 					}
 				}
@@ -213,16 +227,18 @@ func (a *App) autoRemountOnStartup() {
 			continue
 		}
 		accountID := acc.ID
+		savedMountPath := state.MountPath
 
 		// Mark as stopped before remounting so a crash mid-attempt leaves a clean state.
 		_ = a.mountStateRepository.Upsert(a.ctx, storage.MountState{
 			AccountID: accountID,
 			State:     string(mount.StateStopped),
 			LastError: "",
+			MountPath: savedMountPath,
 		})
 
 		go func() {
-			if err := a.doMount(accountID); err != nil {
+			if err := a.doMount(accountID, savedMountPath); err != nil {
 				a.persistMountFailure(accountID, err)
 			}
 		}()
@@ -231,6 +247,18 @@ func (a *App) autoRemountOnStartup() {
 
 func (a *App) shutdown(_ context.Context) {
 	_ = a.db.Close()
+}
+
+// AvailableDriveLetters returns Windows drive letters (D:-Z:) not currently in use.
+func (a *App) AvailableDriveLetters() []string {
+	letters := make([]string, 0)
+	for c := 'D'; c <= 'Z'; c++ {
+		path := fmt.Sprintf(`%c:\`, c)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			letters = append(letters, fmt.Sprintf("%c:", c))
+		}
+	}
+	return letters
 }
 
 // BeginOAuth opens the system browser for an OAuth 2.0 + PKCE flow, waits for
@@ -441,7 +469,7 @@ func (a *App) ListAccounts() ([]AccountView, error) {
 }
 
 // MountAccount is the Wails-bound user-initiated mount. It resets retry state before mounting.
-func (a *App) MountAccount(accountID string) error {
+func (a *App) MountAccount(accountID string, mountPath string) error {
 	if err := connectors.ValidateAccountID(accountID); err != nil {
 		return err
 	}
@@ -451,15 +479,21 @@ func (a *App) MountAccount(accountID string) error {
 	a.retryCounts[accountID] = 0
 	a.retryMu.Unlock()
 
-	err := a.doMount(accountID)
+	err := a.doMount(accountID, mountPath)
 	if err != nil {
 		a.persistMountFailure(accountID, err)
+	} else {
+		// Persist the user-chosen mount path so it's used on auto-remount/retry.
+		if existing, dbErr := a.mountStateRepository.Get(context.Background(), accountID); dbErr == nil {
+			existing.MountPath = mountPath
+			_ = a.mountStateRepository.Upsert(context.Background(), existing)
+		}
 	}
 	return err
 }
 
 // doMount is the shared implementation used by MountAccount, startup recovery, and retry goroutines.
-func (a *App) doMount(accountID string) error {
+func (a *App) doMount(accountID string, mountPath string) error {
 	account, err := a.accountByID(accountID)
 	if err != nil {
 		return err
@@ -511,7 +545,7 @@ func (a *App) doMount(accountID string) error {
 		return &configInvalidError{cause: fmt.Errorf("write rclone config: %w", err)}
 	}
 
-	return a.mountManager.Mount(a.ctx, accountID)
+	return a.mountManager.Mount(a.ctx, accountID, connector.RemoteName(accountID), mountPath)
 }
 
 // configInvalidError wraps config-validation failures so errorCategoryFromErr can classify them.
@@ -563,8 +597,14 @@ func (a *App) AccountMountStatus(accountID string) (MountStatusView, error) {
 				State:         dbState.State,
 				LastError:     dbState.LastError,
 				ErrorCategory: dbState.ErrorCategory,
+				MountPath:     dbState.MountPath,
 			}, nil
 		}
+	}
+
+	mountPath := ""
+	if dbState, dbErr := a.mountStateRepository.Get(a.ctx, accountID); dbErr == nil {
+		mountPath = dbState.MountPath
 	}
 
 	return MountStatusView{
@@ -572,6 +612,7 @@ func (a *App) AccountMountStatus(accountID string) (MountStatusView, error) {
 		State:         string(status.State),
 		LastError:     status.LastError,
 		ErrorCategory: status.ErrorCategory,
+		MountPath:     mountPath,
 	}, nil
 }
 

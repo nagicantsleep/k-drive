@@ -33,7 +33,7 @@ func TestProcessManager_MountUnmount_StateTransitions(t *testing.T) {
 	t.Parallel()
 	manager := newTestManager(t, `C:\WINDOWS\system32\cmd.exe`)
 
-	if err := manager.Mount(context.Background(), "acc-1"); err != nil {
+	if err := manager.Mount(context.Background(), "acc-1", "test-remote", ""); err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestProcessManager_MountFailure_BadBinary(t *testing.T) {
 	t.Parallel()
 	manager := newTestManager(t, `nonexistent-binary-kdrive-test`)
 
-	err := manager.Mount(context.Background(), "acc-1")
+	err := manager.Mount(context.Background(), "acc-1", "test-remote", "")
 	if err == nil {
 		t.Fatalf("Mount(bad binary) expected error, got nil")
 	}
@@ -87,7 +87,7 @@ func TestProcessManager_FastExit_MarkedFailed(t *testing.T) {
 	manager := newTestManager(t, `C:\WINDOWS\system32\cmd.exe`)
 
 	// cmd.exe exits nearly immediately — should end up failed, not mounted.
-	if err := manager.Mount(context.Background(), "acc-1"); err != nil {
+	if err := manager.Mount(context.Background(), "acc-1", "test-remote", ""); err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestProcessManager_UnmountAfterPreflightFailure_SafeStoppedState(t *testing
 	t.Parallel()
 	manager := newTestManager(t, `nonexistent-binary-kdrive-test`)
 
-	err := manager.Mount(context.Background(), "acc-1")
+	err := manager.Mount(context.Background(), "acc-1", "test-remote", "")
 	if err == nil {
 		t.Fatal("Mount() expected preflight error, got nil")
 	}

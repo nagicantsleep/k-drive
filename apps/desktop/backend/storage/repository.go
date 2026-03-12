@@ -30,6 +30,7 @@ type MountState struct {
 	State         string
 	LastError     string
 	ErrorCategory string
+	MountPath     string
 	UpdatedAt     time.Time
 }
 
@@ -181,12 +182,13 @@ func (r *SQLiteMountStateRepository) Upsert(ctx context.Context, state MountStat
 
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO mount_states (account_id, state, last_error, error_category, updated_at) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(account_id) DO UPDATE SET state = excluded.state, last_error = excluded.last_error, error_category = excluded.error_category, updated_at = excluded.updated_at`,
+		`INSERT INTO mount_states (account_id, state, last_error, error_category, mount_path, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(account_id) DO UPDATE SET state = excluded.state, last_error = excluded.last_error, error_category = excluded.error_category, mount_path = excluded.mount_path, updated_at = excluded.updated_at`,
 		state.AccountID,
 		state.State,
 		state.LastError,
 		state.ErrorCategory,
+		state.MountPath,
 		updatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -197,11 +199,11 @@ func (r *SQLiteMountStateRepository) Upsert(ctx context.Context, state MountStat
 }
 
 func (r *SQLiteMountStateRepository) Get(ctx context.Context, accountID string) (MountState, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT account_id, state, last_error, error_category, updated_at FROM mount_states WHERE account_id = ?`, accountID)
+	row := r.db.QueryRowContext(ctx, `SELECT account_id, state, last_error, error_category, COALESCE(mount_path, '') AS mount_path, updated_at FROM mount_states WHERE account_id = ?`, accountID)
 
 	var state MountState
 	var updatedAtRaw string
-	if err := row.Scan(&state.AccountID, &state.State, &state.LastError, &state.ErrorCategory, &updatedAtRaw); err != nil {
+	if err := row.Scan(&state.AccountID, &state.State, &state.LastError, &state.ErrorCategory, &state.MountPath, &updatedAtRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return MountState{}, ErrMountStateNotFound
 		}
@@ -512,6 +514,9 @@ func createSchema(db *sql.DB) error {
 
 	// Migrate: add error_category column to mount_states if it was created without it.
 	_, _ = db.Exec(`ALTER TABLE mount_states ADD COLUMN error_category TEXT NOT NULL DEFAULT ''`)
+
+	// Migrate: add mount_path column to mount_states.
+	_, _ = db.Exec(`ALTER TABLE mount_states ADD COLUMN mount_path TEXT NOT NULL DEFAULT ''`)
 
 	return nil
 }
