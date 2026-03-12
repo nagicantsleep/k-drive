@@ -1,8 +1,15 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package mount
 
-// checkWinFsp is a no-op on non-Windows platforms.
-func checkWinFsp() error {
+// checkFUSE is a no-op on unsupported platforms (e.g. Linux).
+func checkFUSE() error {
 	return nil
+}
+
+func fuseDependencyStatus() DependencyStatus {
+	return DependencyStatus{
+		Name:      "FUSE",
+		Installed: true,
+	}
 }

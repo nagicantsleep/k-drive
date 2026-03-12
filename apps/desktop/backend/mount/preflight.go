@@ -40,7 +40,7 @@ func runPreflight(rclonePath, mountBaseDir string) error {
 	if err := checkRclone(rclonePath); err != nil {
 		return err
 	}
-	if err := checkWinFsp(); err != nil {
+	if err := checkFUSE(); err != nil {
 		return err
 	}
 	if err := checkMountBaseDir(mountBaseDir); err != nil {
@@ -72,16 +72,12 @@ func RunPreflightChecks(rclonePath, mountBaseDir string) []DependencyStatus {
 	}
 	results = append(results, rcloneStatus)
 
-	winfspStatus := DependencyStatus{
-		Name:       "WinFsp",
-		Installed:  true,
-		InstallURL: "https://winfsp.dev/rel/",
+	fuseStatus := fuseDependencyStatus()
+	if err := checkFUSE(); err != nil {
+		fuseStatus.Installed = false
+		fuseStatus.Message = err.Error()
 	}
-	if err := checkWinFsp(); err != nil {
-		winfspStatus.Installed = false
-		winfspStatus.Message = err.Error()
-	}
-	results = append(results, winfspStatus)
+	results = append(results, fuseStatus)
 
 	dirStatus := DependencyStatus{
 		Name:      "Mount directory",

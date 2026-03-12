@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 )
 
-// checkWinFsp verifies WinFsp is installed by checking for its DLL in the expected location.
-func checkWinFsp() error {
+// checkFUSE verifies WinFsp is installed by checking for its DLL in the expected location.
+func checkFUSE() error {
 	candidates := []string{
 		filepath.Join(os.Getenv("ProgramFiles"), `WinFsp\bin\winfsp-x64.dll`),
 		filepath.Join(os.Getenv("ProgramFiles(x86)"), `WinFsp\bin\winfsp-x86.dll`),
@@ -27,5 +27,13 @@ func checkWinFsp() error {
 	return &PreflightError{
 		Category: PreflightDependencyMissing,
 		Message:  fmt.Sprintf("WinFsp is not installed: install WinFsp from https://winfsp.dev and retry"),
+	}
+}
+
+func fuseDependencyStatus() DependencyStatus {
+	return DependencyStatus{
+		Name:       "WinFsp",
+		Installed:  true,
+		InstallURL: "https://winfsp.dev/rel/",
 	}
 }
