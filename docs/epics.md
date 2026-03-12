@@ -14,7 +14,7 @@
 | S3 Operational Hardening | [#20](https://github.com/nagicantsleep/k-drive/issues/20) | CLOSED (sub-issues #21-26 open for bookkeeping) |
 | Provider Expansion Groundwork | [#27](https://github.com/nagicantsleep/k-drive/issues/27) | CLOSED |
 | Google Drive Vertical Slice | [#32](https://github.com/nagicantsleep/k-drive/issues/32) | CLOSED |
-| Explicit Sync Foundation | [#37](https://github.com/nagicantsleep/k-drive/issues/37) | OPEN |
+| Explicit Sync Foundation | [#37](https://github.com/nagicantsleep/k-drive/issues/37) | CLOSED |
 | Windows Drive Experience Hardening | [#38](https://github.com/nagicantsleep/k-drive/issues/38) | OPEN |
 | OneDrive Vertical Slice | [#39](https://github.com/nagicantsleep/k-drive/issues/39) | OPEN |
 | macOS Platform Support | [#40](https://github.com/nagicantsleep/k-drive/issues/40) | OPEN |
