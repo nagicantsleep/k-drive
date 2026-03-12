@@ -57,6 +57,7 @@ March 11, 2026
 
 - [x] Mounted filesystem is opened through `rclone mount`.
 - [x] Mount uses `--vfs-cache-mode writes`, enabling write-through behavior for the mounted drive.
+- [x] Sync model is defined and documented (see docs/sync-model.md).
 - [ ] Explicit sync engine or sync job exists.
 - [ ] Background sync status is surfaced in the UI.
 - [ ] Conflict handling and recovery flows exist.
