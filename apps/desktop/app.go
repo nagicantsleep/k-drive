@@ -545,6 +545,19 @@ func (a *App) doMount(accountID string, mountPath string) error {
 		opts["token"] = encodedToken
 	}
 
+	if connectors.Provider(account.Provider) == connectors.ProviderOneDrive {
+		tokenStore := auth.NewSecretBackedTokenStore(a.secretStore)
+		token, err := tokenStore.Load(a.ctx, auth.OAuthProviderMicrosoft, accountID)
+		if err != nil {
+			return &configInvalidError{cause: fmt.Errorf("load onedrive oauth token: %w", err)}
+		}
+		encodedToken, err := encodeRcloneTokenOption(token)
+		if err != nil {
+			return &configInvalidError{cause: fmt.Errorf("encode onedrive oauth token: %w", err)}
+		}
+		opts["token"] = encodedToken
+	}
+
 	remoteConfig, err := connector.BuildRemoteConfig(a.ctx, connectors.AccountConfig{
 		AccountID: accountID,
 		Provider:  connectors.Provider(account.Provider),
