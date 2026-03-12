@@ -884,3 +884,157 @@ func TestMountAccount_GoogleMissingOAuthTokenFailsAsConfigInvalid(t *testing.T) 
 		t.Fatalf("error category = %q, want config_invalid", errorCategoryFromErr(err))
 	}
 }
+
+func TestMountAccount_WithDriveLetter(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	stub.data["account/acc-dl/access_key_id"] = []byte("AKID")
+	stub.data["account/acc-dl/secret_access_key"] = []byte("SEC")
+
+	db := openAppTestDB(t)
+	mgr := &stubMountManager{}
+	a := newTestApp(db, stub, mgr)
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID: "acc-dl", Provider: "s3", Email: "u@example.com",
+		Options: map[string]string{"endpoint": "https://s3.example.com", "region": "us-east-1"},
+	}); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	if err := a.MountAccount("acc-dl", `Z:\`); err != nil {
+		t.Fatalf("MountAccount() error = %v", err)
+	}
+
+	// Verify mount path was persisted.
+	ms, err := a.mountStateRepository.Get(context.Background(), "acc-dl")
+	if err != nil {
+		t.Fatalf("Get mount state error = %v", err)
+	}
+	if ms.MountPath != `Z:\` {
+		t.Fatalf("MountPath = %q, want %q", ms.MountPath, `Z:\`)
+	}
+}
+
+func TestMountAccount_DefaultPath(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	stub.data["account/acc-def/access_key_id"] = []byte("AKID")
+	stub.data["account/acc-def/secret_access_key"] = []byte("SEC")
+
+	db := openAppTestDB(t)
+	mgr := &stubMountManager{}
+	a := newTestApp(db, stub, mgr)
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID: "acc-def", Provider: "s3", Email: "u@example.com",
+		Options: map[string]string{"endpoint": "https://s3.example.com", "region": "us-east-1"},
+	}); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	if err := a.MountAccount("acc-def", ""); err != nil {
+		t.Fatalf("MountAccount() error = %v", err)
+	}
+
+	// With empty mount path, persisted MountPath should be empty (default will be used).
+	ms, err := a.mountStateRepository.Get(context.Background(), "acc-def")
+	if err != nil {
+		t.Fatalf("Get mount state error = %v", err)
+	}
+	if ms.MountPath != "" {
+		t.Fatalf("MountPath = %q, want empty", ms.MountPath)
+	}
+}
+
+func TestDeleteAccount_CleansUpEverything(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubSecretStore()
+	stub.data["account/acc-del/access_key_id"] = []byte("AKID")
+	stub.data["account/acc-del/secret_access_key"] = []byte("SEC")
+
+	db := openAppTestDB(t)
+	mgr := &stubMountManager{}
+	a := newTestApp(db, stub, mgr)
+
+	if err := a.accountRepository.Save(context.Background(), storage.Account{
+		ID: "acc-del", Provider: "s3", Email: "u@example.com",
+		Options: map[string]string{"endpoint": "https://s3.example.com", "region": "us-east-1"},
+	}); err != nil {
+		t.Fatalf("Save error = %v", err)
+	}
+
+	// Mount it first so there's mount state.
+	if err := a.MountAccount("acc-del", ""); err != nil {
+		t.Fatalf("MountAccount error = %v", err)
+	}
+
+	// Delete the account.
+	if err := a.DeleteAccount("acc-del"); err != nil {
+		t.Fatalf("DeleteAccount error = %v", err)
+	}
+
+	// Account should be gone.
+	accounts, err := a.accountRepository.List(context.Background())
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	for _, acc := range accounts {
+		if acc.ID == "acc-del" {
+			t.Fatal("account still exists after delete")
+		}
+	}
+
+	// Mount state should be gone.
+	_, err = a.mountStateRepository.Get(context.Background(), "acc-del")
+	if err == nil {
+		t.Fatal("mount state still exists after delete")
+	}
+
+	// Secrets should be gone.
+	_, err = stub.Load(context.Background(), "account/acc-del/access_key_id")
+	if err == nil {
+		t.Fatal("secret still exists after delete")
+	}
+}
+
+func TestPreflightCheck_ReturnsStructuredResults(t *testing.T) {
+	t.Parallel()
+
+	db := openAppTestDB(t)
+	a := newTestApp(db, newStubSecretStore(), &stubMountManager{})
+
+	results := a.PreflightCheck()
+	if len(results) != 3 {
+		t.Fatalf("PreflightCheck() returned %d results, want 3", len(results))
+	}
+
+	names := make([]string, len(results))
+	for i, r := range results {
+		names[i] = r.Name
+	}
+	if names[0] != "rclone" || names[1] != "WinFsp" || names[2] != "Mount directory" {
+		t.Fatalf("unexpected dependency names: %v", names)
+	}
+}
+
+func TestAvailableDriveLetters_ReturnsLetters(t *testing.T) {
+	t.Parallel()
+
+	db := openAppTestDB(t)
+	a := newTestApp(db, newStubSecretStore(), &stubMountManager{})
+
+	letters := a.AvailableDriveLetters()
+	// C: should not be in the list (it exists), but we should get at least some letters.
+	for _, l := range letters {
+		if l == "C:" {
+			t.Fatal("C: should not be in available drive letters")
+		}
+	}
+	if len(letters) == 0 {
+		t.Fatal("expected at least one available drive letter")
+	}
+}

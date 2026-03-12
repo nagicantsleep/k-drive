@@ -490,10 +490,16 @@ func (a *App) MountAccount(accountID string, mountPath string) error {
 		a.persistMountFailure(accountID, err)
 	} else {
 		// Persist the user-chosen mount path so it's used on auto-remount/retry.
-		if existing, dbErr := a.mountStateRepository.Get(context.Background(), accountID); dbErr == nil {
-			existing.MountPath = mountPath
-			_ = a.mountStateRepository.Upsert(context.Background(), existing)
+		existing, dbErr := a.mountStateRepository.Get(context.Background(), accountID)
+		if dbErr != nil {
+			// No existing row yet — create one with mounted state.
+			existing = storage.MountState{
+				AccountID: accountID,
+				State:     string(mount.StateMounted),
+			}
 		}
+		existing.MountPath = mountPath
+		_ = a.mountStateRepository.Upsert(context.Background(), existing)
 	}
 	return err
 }
